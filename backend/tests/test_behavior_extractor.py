@@ -1,23 +1,31 @@
-from app.analyzer.normalizer import EventNormalizer
 from app.analyzer.behavior_extractor import BehaviorExtractor
-from app.utils.json_printer import print_json
+from app.models.event_types import EventType
 
-raw = {
-    "source": "Windows",
-    "host": "PC-01",
-    "event_type": "FAILED_LOGIN",
-    "description": "Administrator failed to login",
-    "user": "Administrator"
-}
 
-normalizer = EventNormalizer()
-event = normalizer.normalize(raw)
+def test_failed_login_becomes_a_low_severity_behavior(normalizer):
 
-extractor = BehaviorExtractor()
-behavior = extractor.extract(event)
+    event = normalizer.normalize(
+        {
+            "source": "Windows",
+            "host": "PC-01",
+            "event_type": EventType.FAILED_LOGIN,
+            "description": "Administrator failed to login",
+            "user": "Administrator",
+        }
+    )
 
-print("=" * 60)
-print("Behavior Extractor Test")
-print("=" * 60)
+    behavior = BehaviorExtractor().extract(event)
 
-print_json(behavior)
+    assert behavior.name == "Failed Authentication Attempt"
+    assert behavior.severity == "Low"
+    assert behavior.evidence == [event]
+
+
+def test_unrecognised_event_returns_unknown_behavior(normalizer):
+
+    event = normalizer.normalize({"event_type": "SOMETHING_ELSE"})
+
+    behavior = BehaviorExtractor().extract(event)
+
+    assert behavior.name == "Unknown Behavior"
+    assert behavior.confidence == 0.0

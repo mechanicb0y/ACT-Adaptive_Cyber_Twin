@@ -1,14 +1,21 @@
-﻿__pycache__/
+__pycache__/
 *.py[cod]
 *.class
 *.so
 .Python
 env/
 venv/
+.venv/
 .env
 *.egg-info/
 dist/
 build/
 .idea/
 .vscode/
+.pytest_cache/
+
+# Captured logs are noise...
 *.log
+
+# ...except the sample logs the test suite depends on.
+!backend/tests/logs/*.log

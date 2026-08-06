@@ -1,0 +1,35 @@
+Aug  6 09:02:11 kali systemd[1]: Started ssh.service - OpenBSD Secure Shell server.
+Aug  6 09:02:11 kali sshd[612]: Server listening on 0.0.0.0 port 22.
+Aug  6 09:14:03 kali CRON[1180]: pam_unix(cron:session): session opened for user root(uid=0) by root(uid=0)
+Aug  6 09:14:03 kali CRON[1180]: pam_unix(cron:session): session closed for user root
+Aug  6 09:31:44 kali sshd-session[1904]: Accepted password for kali from 192.168.1.10 port 49102 ssh2
+Aug  6 09:31:44 kali sshd-session[1904]: pam_unix(sshd:session): session opened for user kali(uid=1000) by kali(uid=0)
+Aug  6 09:33:02 kali sudo[1955]:     kali : TTY=pts/0 ; PWD=/home/kali ; USER=root ; COMMAND=/usr/bin/apt update
+Aug  6 21:10:58 kali sshd-session[7601]: Invalid user admin from 192.168.1.50 port 51402
+Aug  6 21:10:58 kali sshd-session[7601]: Failed password for invalid user admin from 192.168.1.50 port 51402 ssh2
+Aug  6 21:11:01 kali sshd-session[7603]: Invalid user administrator from 192.168.1.50 port 51404
+Aug  6 21:11:01 kali sshd-session[7603]: Failed password for invalid user administrator from 192.168.1.50 port 51404 ssh2
+Aug  6 21:11:04 kali sshd-session[7605]: Invalid user test from 192.168.1.50 port 51408
+Aug  6 21:11:04 kali sshd-session[7605]: Failed password for invalid user test from 192.168.1.50 port 51408 ssh2
+Aug  6 21:11:09 kali sshd-session[7611]: Failed password for root from 192.168.1.50 port 51412 ssh2
+Aug  6 21:11:12 kali sshd-session[7611]: Failed password for root from 192.168.1.50 port 51412 ssh2
+Aug  6 21:11:15 kali sshd-session[7611]: Failed password for root from 192.168.1.50 port 51412 ssh2
+Aug  6 21:11:18 kali sshd-session[7614]: Failed password for root from 192.168.1.50 port 51416 ssh2
+Aug  6 21:11:21 kali sshd-session[7614]: Failed password for root from 192.168.1.50 port 51416 ssh2
+Aug  6 21:11:24 kali sshd-session[7614]: Failed password for root from 192.168.1.50 port 51416 ssh2
+Aug  6 21:11:24 kali sshd-session[7614]: error: maximum authentication attempts exceeded for root from 192.168.1.50 port 51416 ssh2 [preauth]
+Aug  6 21:11:29 kali sshd-session[7620]: Failed password for kali from 192.168.1.50 port 51420 ssh2
+Aug  6 21:11:32 kali sshd-session[7620]: Failed password for kali from 192.168.1.50 port 51420 ssh2
+Aug  6 21:11:35 kali sshd-session[7620]: Failed password for kali from 192.168.1.50 port 51420 ssh2
+Aug  6 21:11:38 kali sshd-session[7623]: Failed password for kali from 192.168.1.50 port 51424 ssh2
+Aug  6 21:11:41 kali sshd-session[7623]: Failed password for kali from 192.168.1.50 port 51424 ssh2
+Aug  6 21:11:44 kali sshd-session[7623]: Failed password for kali from 192.168.1.50 port 51424 ssh2
+Aug  6 21:11:47 kali sshd-session[7627]: Failed password for kali from 192.168.1.50 port 51428 ssh2
+Aug  6 21:11:51 kali sshd-session[7631]: Accepted password for kali from 192.168.1.50 port 51432 ssh2
+Aug  6 21:11:51 kali sshd-session[7631]: pam_unix(sshd:session): session opened for user kali(uid=1000) by kali(uid=0)
+Aug  6 21:12:14 kali sudo[7688]: pam_unix(sudo:auth): authentication failure; logname=kali uid=1000 euid=0 tty=/dev/pts/1 ruser=kali rhost=  user=kali
+Aug  6 21:12:31 kali sudo[7692]:     kali : TTY=pts/1 ; PWD=/home/kali ; USER=root ; COMMAND=/usr/bin/cat /etc/shadow
+Aug  6 21:12:58 kali sudo[7701]:     kali : TTY=pts/1 ; PWD=/home/kali ; USER=root ; COMMAND=/usr/sbin/useradd -m -s /bin/bash backdoor
+Aug  6 21:12:58 kali useradd[7703]: new user: name=backdoor, UID=1001, GID=1001, home=/home/backdoor, shell=/bin/bash, from=/dev/pts/1
+Aug  6 21:13:05 kali sudo[7710]:     kali : TTY=pts/1 ; PWD=/home/kali ; USER=root ; COMMAND=/usr/sbin/usermod -aG sudo backdoor
+Aug  6 21:13:40 kali sshd-session[7631]: pam_unix(sshd:session): session closed for user kali
