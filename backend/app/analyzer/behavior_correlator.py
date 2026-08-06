@@ -43,7 +43,7 @@ class BehaviorCorrelator:
             if len(events) >= 5:
 
                 behavior = Behavior(
-                    id=str(uuid4()),
+                    id=str(uuid4()), #just for testing now
                     name="Possible Brute Force Attack",
                     description=(
                         f"Detected {len(events)} failed "

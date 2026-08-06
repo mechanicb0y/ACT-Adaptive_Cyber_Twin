@@ -10,11 +10,11 @@ class EventStore:
 
 
     def add(self, event: SecurityEvent):
-        """
-        Store a new security event.
-        """
 
-        self.events.append(event)
+        #Store a new security event.
+
+
+        self.events.append(event) #Adds the event to the list
 
 
     def all(self):

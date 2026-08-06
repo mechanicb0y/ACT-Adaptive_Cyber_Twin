@@ -16,7 +16,7 @@ class BehaviorExtractor:
                 description="A login attempt failed.",
                 severity="Low",
                 confidence=1.0,
-                evidence=[event]
+                evidence=[event] #Puts the SecurityEvent as proof
             )
 
         return Behavior(
