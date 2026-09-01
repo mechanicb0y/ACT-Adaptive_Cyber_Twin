@@ -1,60 +1,89 @@
-from uuid import uuid4
+#The correlator contains no detection logic of its own.
+#It runs every correlation rule, scores the results with the risk engine, labels
+#them with MITRE ATT&CK, and sorts. Detection lives in app/analyzer/correlation,
+#danger lives in the risk engine, vocabulary lives in the mapper, and this file
+#only puts the three together.
 
-from app.storage.event_store import EventStore
+from typing import Iterable, List, Optional
+
+from app.analyzer.attack_graph_builder import AttackGraphBuilder
+from app.analyzer.correlation import default_correlation_rules
+from app.analyzer.correlation.base_correlation_rule import BaseCorrelationRule
+from app.analyzer.mitre_mapper import MitreMapper
+from app.analyzer.risk_engine import RiskEngine
+from app.config.detection_config import DetectionConfig
+from app.models.attack_graph import AttackGraph
 from app.models.behavior import Behavior
+from app.models.severity import Severity
+from app.storage.event_store import EventStore
 
 
 class BehaviorCorrelator:
 
-    def __init__(self, event_store: EventStore):
-
+    def __init__(
+        self,
+        event_store: EventStore,
+        rules: Optional[Iterable[BaseCorrelationRule]] = None,
+        config: Optional[DetectionConfig] = None,
+        risk_engine: Optional[RiskEngine] = None,
+        mitre_mapper: Optional[MitreMapper] = None,
+    ):
         self.event_store = event_store
 
-
-    def detect_brute_force(self):
-
-        failed_events = self.event_store.get_by_type(
-            "FAILED_LOGIN"
+        #injected, so a test can run one rule alone
+        self.rules: List[BaseCorrelationRule] = list(
+            rules if rules is not None else default_correlation_rules()
         )
 
+        self.config = config or DetectionConfig.load()
+        self.risk_engine = risk_engine or RiskEngine()
+        self.mitre_mapper = mitre_mapper or MitreMapper()
 
-        suspicious_groups = {}
+    def detect(self) -> List[Behavior]:
+        #run every enabled rule, score the results, label them, most dangerous first
 
+        behaviors: List[Behavior] = []
 
-        for event in failed_events:
+        for rule in self.rules:
 
-            key = (
-                event.user,
-                event.ip_address
-            )
+            settings = rule.settings(self.config)
 
-            if key not in suspicious_groups:
-                suspicious_groups[key] = []
+            if not settings.enabled:
+                continue
 
-            suspicious_groups[key].append(event)
-
-
-
-        behaviors = []
-
-
-        for key, events in suspicious_groups.items():
-
-            if len(events) >= 5:
-
-                behavior = Behavior(
-                    id=str(uuid4()), #just for testing now
-                    name="Possible Brute Force Attack",
-                    description=(
-                        f"Detected {len(events)} failed "
-                        f"login attempts from {key[1]}"
-                    ),
-                    severity="High",
-                    confidence=0.90,
-                    evidence=events
-                )
-
+            for behavior in rule.detect(self.event_store, settings):
+                self.risk_engine.apply(behavior)
+                self.mitre_mapper.map(behavior)
                 behaviors.append(behavior)
 
+        behaviors.sort(
+            key=lambda item: (item.risk_score, Severity.rank(item.severity)),
+            reverse=True,
+        )
 
         return behaviors
+
+    def build_attack_graph(
+        self,
+        behaviors: Optional[List[Behavior]] = None,
+    ) -> AttackGraph:
+        #connect the behaviors into attack paths
+
+        behaviors = behaviors if behaviors is not None else self.detect()
+
+        builder = AttackGraphBuilder(
+            mapper=self.mitre_mapper,
+            max_gap_seconds=int(
+                self.config.option("graph", "max_gap_seconds", 3600)
+            ),
+        )
+
+        return builder.build(behaviors)
+
+    def detect_brute_force(self) -> List[Behavior]:
+        #kept so older code and tests keep working
+        return [
+            behavior
+            for behavior in self.detect()
+            if behavior.rule == "brute-force"
+        ]

@@ -1,0 +1,115 @@
+{
+    "_comment": "Local MITRE ATT&CK knowledge base. Kept offline on purpose so the demo never depends on the internet. Maps each ACT correlation rule to its ATT&CK technique(s) and to a kill chain stage.",
+
+    "source": "MITRE ATT&CK Enterprise",
+
+    "stages": [
+        {"stage": 1, "name": "Discovery"},
+        {"stage": 2, "name": "Credential Access"},
+        {"stage": 3, "name": "Initial Access"},
+        {"stage": 4, "name": "Privilege Escalation"},
+        {"stage": 5, "name": "Credential Theft"},
+        {"stage": 6, "name": "Persistence"}
+    ],
+
+    "rules": {
+
+        "user-enumeration": {
+            "stage": 1,
+            "techniques": [
+                {
+                    "id": "T1087.001",
+                    "name": "Account Discovery: Local Account",
+                    "tactic": "Discovery",
+                    "tactic_id": "TA0007",
+                    "description": "The attacker probes for usernames that exist on the host before choosing a target."
+                }
+            ]
+        },
+
+        "brute-force": {
+            "stage": 2,
+            "techniques": [
+                {
+                    "id": "T1110.001",
+                    "name": "Brute Force: Password Guessing",
+                    "tactic": "Credential Access",
+                    "tactic_id": "TA0006",
+                    "description": "Repeated password guesses against a known account."
+                }
+            ]
+        },
+
+        "distributed-brute-force": {
+            "stage": 2,
+            "techniques": [
+                {
+                    "id": "T1110.001",
+                    "name": "Brute Force: Password Guessing",
+                    "tactic": "Credential Access",
+                    "tactic_id": "TA0006",
+                    "description": "Password guessing spread over many source addresses to stay under per-address limits."
+                }
+            ]
+        },
+
+        "successful-brute-force": {
+            "stage": 3,
+            "techniques": [
+                {
+                    "id": "T1110.001",
+                    "name": "Brute Force: Password Guessing",
+                    "tactic": "Credential Access",
+                    "tactic_id": "TA0006",
+                    "description": "The guessing that produced the working password."
+                },
+                {
+                    "id": "T1078.003",
+                    "name": "Valid Accounts: Local Accounts",
+                    "tactic": "Initial Access",
+                    "tactic_id": "TA0001",
+                    "description": "The attacker now holds working credentials for a local account."
+                }
+            ]
+        },
+
+        "privilege-escalation": {
+            "stage": 4,
+            "techniques": [
+                {
+                    "id": "T1548.003",
+                    "name": "Abuse Elevation Control Mechanism: Sudo and Sudo Caching",
+                    "tactic": "Privilege Escalation",
+                    "tactic_id": "TA0004",
+                    "description": "Attempting to run commands as root through sudo."
+                }
+            ]
+        },
+
+        "sensitive-file-access": {
+            "stage": 5,
+            "techniques": [
+                {
+                    "id": "T1003.008",
+                    "name": "OS Credential Dumping: /etc/passwd and /etc/shadow",
+                    "tactic": "Credential Access",
+                    "tactic_id": "TA0006",
+                    "description": "Reading the local password hashes for offline cracking or reuse."
+                }
+            ]
+        },
+
+        "persistence": {
+            "stage": 6,
+            "techniques": [
+                {
+                    "id": "T1136.001",
+                    "name": "Create Account: Local Account",
+                    "tactic": "Persistence",
+                    "tactic_id": "TA0003",
+                    "description": "A new local account so access survives a password change."
+                }
+            ]
+        }
+    }
+}

@@ -19,3 +19,6 @@ build/
 
 # ...except the sample logs the test suite depends on.
 !backend/tests/logs/*.log
+
+# The RAG vector index is generated automatically on first run.
+backend/data/rag_index.json
