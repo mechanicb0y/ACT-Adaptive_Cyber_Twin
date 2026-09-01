@@ -103,9 +103,37 @@ def test_user_added(parse):
 @pytest.mark.parametrize(
     "line",
     [
+        "Aug  6 21:11:24 kali sshd-session[7614]: error: maximum authentication "
+        "attempts exceeded for root from 192.168.1.50 port 51416 ssh2 [preauth]",
+        "Aug  6 21:11:24 kali sshd-session[7614]: error: maximum authentication "
+        "attempts exceeded for invalid user oracle from 10.0.0.9 port 4444 ssh2 [preauth]",
+        "Aug  6 21:11:25 kali sshd-session[7615]: Connection closed by "
+        "authenticating user root 192.168.1.50 port 51420 [preauth]",
+        "Aug  6 21:11:26 kali sshd-session[7616]: Disconnected from "
+        "authenticating user admin 192.168.1.50 port 51421 [preauth]",
+        "Aug  6 21:11:27 kali sshd[7617]: Connection reset by "
+        "authenticating user kali 192.168.1.50 port 51422 [preauth]",
+    ],
+)
+def test_ssh_auth_abort_lines_count_as_failed_logins(parse, line):
+
+    result = parse(line)
+
+    assert result is not None
+    assert result["matched_rule"] == "ssh-auth-abort"
+    assert result["event_type"] == EventType.FAILED_LOGIN
+    assert result["ip_address"] in ("192.168.1.50", "10.0.0.9")
+    assert result["user"] in ("root", "oracle", "admin", "kali")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
         "Aug  6 09:02:11 kali systemd[1]: Started ssh.service - OpenBSD Secure Shell server.",
         "Aug  6 09:14:03 kali CRON[1180]: pam_unix(cron:session): session opened for user root(uid=0) by root(uid=0)",
         "Aug  6 21:13:40 kali sshd-session[7631]: pam_unix(sshd:session): session closed for user kali",
+        # a plain probe with no credentials tried must NOT look like a brute force
+        "Aug  6 21:11:24 kali sshd-session[7000]: Connection closed by 192.168.1.50 port 51000 [preauth]",
         "",
         "   ",
     ],

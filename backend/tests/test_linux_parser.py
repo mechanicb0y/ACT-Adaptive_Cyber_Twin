@@ -40,13 +40,14 @@ def test_rules_are_injectable():
 
 def test_default_parser_registers_all_rules(parser):
 
-    assert len(parser.rules) == 6
+    assert len(parser.rules) == 7
 
     names = {rule.name for rule in parser.rules}
 
     assert names == {
         "ssh-failed-login",
         "ssh-invalid-user",
+        "ssh-auth-abort",
         "ssh-accepted-login",
         "sudo-auth-failure",
         "sudo-command",

@@ -1,0 +1,69 @@
+{
+    "_comment": "Detection thresholds and time windows. Edit this file, not the code.",
+
+    "graph": {
+        "_comment": "Two behaviors are only joined in the attack graph if the gap between them is smaller than this. Without it, two unrelated attackers who both target 'root' would be drawn as one attack.",
+        "max_gap_seconds": 3600
+    },
+
+    "response": {
+        "_comment": "The AI layer's decision thresholds. A source is BLOCKED only when the activity matched an attack rule (brute force, user enumeration, credential access, persistence, ...) AND it is serious (the attacker got in, or risk >= block_threshold) AND confidence >= auto_execute_confidence. Below that it is an ALERT for a human; low risk is MONITOR. alert_threshold is the risk at which a non-attack pattern is still worth an alert. allow_account_lock lets the armed responder also lock accounts, not only block IPs. auto_execute_confidence (0..1) is both the bar for the engine to recommend a block and, in autonomous mode, the bar to carry it out; turn on Simulation Mode in the dashboard to preview only.",
+        "block_threshold": 70,
+        "alert_threshold": 40,
+        "allow_account_lock": false,
+        "auto_execute_confidence": 0.9
+    },
+
+    "rules": {
+
+        "brute-force": {
+            "enabled": true,
+            "threshold": 5,
+            "window_seconds": 120
+        },
+
+        "user-enumeration": {
+            "enabled": true,
+            "threshold": 3,
+            "window_seconds": 300
+        },
+
+        "distributed-brute-force": {
+            "enabled": true,
+            "threshold": 3,
+            "window_seconds": 600
+        },
+
+        "successful-brute-force": {
+            "enabled": true,
+            "threshold": 3,
+            "window_seconds": 300
+        },
+
+        "privilege-escalation": {
+            "enabled": true,
+            "threshold": 1,
+            "window_seconds": 300
+        },
+
+        "sensitive-file-access": {
+            "enabled": true,
+            "threshold": 1,
+            "window_seconds": 300,
+            "sensitive_paths": [
+                "/etc/shadow",
+                "/etc/passwd",
+                "/etc/sudoers",
+                "/root/.ssh",
+                "id_rsa",
+                "authorized_keys"
+            ]
+        },
+
+        "persistence": {
+            "enabled": true,
+            "threshold": 1,
+            "window_seconds": 900
+        }
+    }
+}
