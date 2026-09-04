@@ -148,9 +148,56 @@ class Settings:
     ssl_key: Optional[str] = field(default_factory=lambda: _opt("ACT_SSL_KEY"))
     force_https: bool = field(default_factory=lambda: _bool("ACT_FORCE_HTTPS", False))
 
+    # --- CORS ------------------------------------------------------------
+    # Comma-separated origin allowlist. Empty -> localhost dev origins only.
+    # "*" is honoured (with a warning) but disables credentialed requests.
+    cors_origins: str = field(default_factory=lambda: _str("ACT_CORS_ORIGINS", ""))
+    cors_allow_credentials: bool = field(
+        default_factory=lambda: _bool("ACT_CORS_ALLOW_CREDENTIALS", False)
+    )
+
+    # --- rate limiting (in-process, per client IP) ---------------------------
+    rate_limit_enabled: bool = field(
+        default_factory=lambda: _bool("ACT_RATE_LIMIT_ENABLED", True)
+    )
+    rate_limit_per_minute: int = field(
+        default_factory=lambda: _int("ACT_RATE_LIMIT_PER_MIN", 240)
+    )
+    # Tighter bucket for the credential endpoints (login / refresh).
+    rate_limit_auth_per_minute: int = field(
+        default_factory=lambda: _int("ACT_RATE_LIMIT_AUTH_PER_MIN", 12)
+    )
+    # Trust X-Forwarded-For (only behind a proxy you control).
+    trust_forwarded_for: bool = field(
+        default_factory=lambda: _bool("ACT_TRUST_FORWARDED_FOR", False)
+    )
+
+    # --- metrics -----------------------------------------------------------
+    metrics_enabled: bool = field(
+        default_factory=lambda: _bool("ACT_METRICS_ENABLED", True)
+    )
+    # If set, /api/metrics requires ?token=<this> (or a matching bearer).
+    metrics_token: Optional[str] = field(default_factory=lambda: _opt("ACT_METRICS_TOKEN"))
+
+    # --- persistence of pipeline output ----------------------------------
+    persist_enabled: bool = field(
+        default_factory=lambda: _bool("ACT_PERSIST_ENABLED", True)
+    )
+
     @property
     def is_production(self) -> bool:
         return self.env.lower() in {"production", "prod"}
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        raw = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        if raw:
+            return raw
+        # sensible default: the app talking to itself + file:// (null origin)
+        return [
+            "http://localhost:8000", "http://127.0.0.1:8000",
+            "https://localhost:8000", "https://127.0.0.1:8000",
+        ]
 
     @property
     def oauth_providers(self) -> dict[str, tuple[str, str]]:

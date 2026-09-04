@@ -24,12 +24,24 @@ from app.core.settings import get_settings
 
 log = logging.getLogger("app.auth.middleware")
 
-# Open sub-paths under /api. Everything else under /api needs a bearer token.
-OPEN_API_PREFIXES = ("/api/auth/", "/api/health", "/api/metrics")
+# Open paths under /api. Everything else under /api needs a bearer token. The
+# check runs on the version-normalised path, so /api/v1/health matches too.
+OPEN_API_PREFIXES = ("/api/auth", "/api/health", "/api/metrics")
+
+
+def _normalise(path: str) -> str:
+    # collapse the optional version segment: /api/v1/foo -> /api/foo
+    if path == "/api/v1":
+        return "/api"
+    if path.startswith("/api/v1/"):
+        return "/api/" + path[len("/api/v1/"):]
+    return path
 
 
 def _is_open(path: str) -> bool:
-    return any(path == p or path.startswith(p) for p in OPEN_API_PREFIXES)
+    norm = _normalise(path)
+    return any(norm == prefix or norm.startswith(prefix + "/")
+               for prefix in OPEN_API_PREFIXES)
 
 
 def _claims_to_user(token: str) -> CurrentUser:

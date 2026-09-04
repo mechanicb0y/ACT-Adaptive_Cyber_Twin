@@ -33,7 +33,8 @@ from app.db.session import get_db
 
 log = logging.getLogger("app.auth.router")
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+# Mounted by main.py at both /api/auth and /api/v1/auth.
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _client_ip(request: Request) -> Optional[str]:

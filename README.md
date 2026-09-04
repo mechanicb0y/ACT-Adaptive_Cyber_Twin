@@ -120,9 +120,10 @@ scripts/attacks/        end-to-end attack simulations
 ACT/
 ├── backend/            Python: pipeline, API, tests
 │   ├── app/            source (see Architecture)
+│   │   ├── api/v1/     versioned HTTP routes (also aliased at /api/…)
 │   │   ├── auth/       login, JWT sessions, refresh-token rotation, RBAC, OAuth2
-│   │   ├── core/       service infrastructure: settings, structured logging
-│   │   └── db/         SQLAlchemy models + engine (optional durable store)
+│   │   ├── core/       service infrastructure: settings, logging, metrics
+│   │   └── db/         SQLAlchemy models + engine + pipeline-output mirror
 │   ├── alembic/        database schema migrations
 │   ├── config/detection.json   thresholds, windows, response & alert settings
 │   ├── data/           offline MITRE KB + generated RAG index + local act.db
@@ -324,12 +325,44 @@ python -m alembic downgrade -1              # roll back one revision
 Migrations use batch mode, so the same history applies to SQLite and Postgres.
 `backend/.env.example` documents every `ACT_DB_*` and `ACT_LOG_*` variable.
 
+Pipeline output is **mirrored** into the database as it runs — events (append
+only), behaviours and attack paths (rewritten each cycle), responses, alerts and
+report metadata. The in-memory engine stays authoritative; the mirror is
+best-effort (a DB hiccup is logged, never fatal) and turns off with
+`ACT_PERSIST_ENABLED=false`.
+
 ### Logging
 
 `ACT_LOG_FORMAT=json` switches the service to one-JSON-object-per-line output
 for journald / Docker / a log shipper; `ACT_LOG_FILE` adds a rotating file
 handler. `console` (the default) is the short human format the CLI has always
 printed.
+
+---
+
+## API versioning, CORS, rate limiting, metrics
+
+- **Versioning** — every API route is served at **`/api/v1/…`** (the canonical
+  form, and the only one in the OpenAPI schema) *and* at the unversioned
+  `/api/…` as a backward-compatible alias. The dashboard uses the alias; new
+  clients should use `/api/v1`.
+- **CORS** — `ACT_CORS_ORIGINS` is a comma-separated origin allowlist (default:
+  localhost dev origins). `*` works but is warned about and disables
+  credentialed requests.
+- **Rate limiting** — per client IP, fixed 60-second window, in-process. Two
+  buckets: `ACT_RATE_LIMIT_AUTH_PER_MIN` (default 12) for `/api/auth/login` and
+  `/refresh`, `ACT_RATE_LIMIT_PER_MIN` (default 240) for the rest. A 429 carries
+  `Retry-After`; every response carries `X-RateLimit-*`. Behind several workers
+  the effective limit multiplies by the worker count.
+- **Health** — `GET /api/health` (open): status, database, Ollama, uptime, event
+  count, active attack paths, last attack time.
+- **Metrics** — `GET /api/metrics` (open; set `ACT_METRICS_TOKEN` to gate it)
+  serves Prometheus text: `act_http_requests_total`,
+  `act_http_request_duration_seconds` (+ rolling `_p50/_p95/_p99` gauges),
+  `act_attacks_detected_total`, `act_blocks_total{result}`,
+  `act_alerts_sent_total{platform,result}`, `act_login_attempts_total{result}`,
+  and live gauges `act_events`, `act_behaviors`, `act_active_attack_paths`,
+  `act_attack_paths_compromised`.
 
 ---
 

@@ -36,6 +36,11 @@ _NEUTRALISED_ENV = (
     "ACT_OAUTH_GITHUB_CLIENT_ID",
     "ACT_OAUTH_GITHUB_CLIENT_SECRET",
     "ACT_OAUTH_ALLOWED_DOMAINS",
+    "ACT_RATE_LIMIT_ENABLED",
+    "ACT_RATE_LIMIT_PER_MIN",
+    "ACT_RATE_LIMIT_AUTH_PER_MIN",
+    "ACT_METRICS_TOKEN",
+    "ACT_CORS_ORIGINS",
 )
 
 
@@ -55,9 +60,18 @@ def _hermetic_env(monkeypatch):
     monkeypatch.setenv("ACT_LLM_PROVIDER", "none")
     monkeypatch.setenv("ACT_AUTH_ENABLED", "false")
     monkeypatch.setenv("ACT_JWT_SECRET", "test-secret-not-for-production-0123456789")
+    # The in-process rate limiter is a module singleton whose counts would leak
+    # across tests in one run. Off by default; test_ratelimit.py opts back in.
+    monkeypatch.setenv("ACT_RATE_LIMIT_ENABLED", "false")
 
     from app.core.settings import reload_settings
     reload_settings()
+
+    try:
+        from app.api.ratelimit import get_limiter
+        get_limiter().reset()
+    except Exception:  # noqa: BLE001  (module may not be importable in some units)
+        pass
 
 
 @pytest.fixture

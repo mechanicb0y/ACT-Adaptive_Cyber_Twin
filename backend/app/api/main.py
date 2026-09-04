@@ -1,50 +1,38 @@
-#The ACT REST API.
-#
-#Every route here is three or four lines: read the query, call the
-#AnalysisEngine, serialize. All the real work lives in app/api/engine.py, which
-#has no web framework in it and is tested without starting a server.
-#
-#Run it with:
-#    cd backend
-#    python -m uvicorn app.api.main:app --reload
-#
-#Then open http://127.0.0.1:8000 for the dashboard
-#and  http://127.0.0.1:8000/docs for the generated API documentation.
+"""The ACT REST API application.
+
+Route handlers live in ``app/api/v1/`` (engine-backed) and ``app/auth/`` (auth).
+This module only assembles them: the middleware stack, the versioned + legacy
+mounts, the dashboard/login pages, the event-stream websocket, and startup.
+
+Run it with:
+    cd backend
+    python -m uvicorn app.api.main:app --reload
+
+Dashboard at http://127.0.0.1:8000/ , API docs at /docs .
+"""
 
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional
 
 from app.config import env as _env  # noqa: F401  (loads backend/.env on import)
 
-from fastapi import (
-    Depends,
-    FastAPI,
-    HTTPException,
-    Query,
-    Response,
-    WebSocket,
-    WebSocketDisconnect,
-)
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.api.engine import AnalysisEngine
-from app.api.serializers import (
-    assessments_to_list,
-    behaviors_to_list,
-    events_to_list,
-    response_to_dict,
-)
+from app.api.cors import DynamicCORSMiddleware
+from app.api.deps import get_engine
+from app.api.serializers import events_to_list
+from app.api.v1 import api_router
+from app.api.ratelimit import RateLimitMiddleware
 from app.auth import service as auth_service
-from app.auth.dependencies import require_admin, require_analyst
 from app.auth.middleware import AuthMiddleware, authenticate_websocket
 from app.auth.router import router as auth_router
 from app.core.logging import configure_logging
+from app.core.metrics import MetricsMiddleware
 from app.core.settings import get_settings
-from app.db.session import check_connection, get_sessionmaker, init_db
+from app.db.session import get_sessionmaker, init_db
 
 log = logging.getLogger("app.api")
 
@@ -58,7 +46,7 @@ async def lifespan(_app: FastAPI):
     try:
         init_db()  # create_all for SQLite; a no-op once Alembic has run on PG
     except Exception:  # noqa: BLE001  (a broken DB must not stop the read-only demo)
-        log.exception("database init failed; auth endpoints will error until fixed")
+        log.exception("database init failed; some endpoints will error until fixed")
     if settings.auth_enabled:
         try:
             with get_sessionmaker()() as session:
@@ -73,26 +61,29 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="ACT - Adaptive Cyber Twin",
-    description="Linux security log ingestion, behavior correlation, risk scoring, MITRE ATT&CK mapping and attack graphs.",
+    description="Linux security log ingestion, behavior correlation, risk scoring, "
+                "MITRE ATT&CK mapping, attack graphs and autonomous response.",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-#every /api route needs a bearer token except /api/auth/* and /api/health
+# Middleware, added inner-first so the runtime order is:
+#   CORS (answers preflight, decorates every response)
+#   -> rate limiting -> request metrics -> authentication -> routes
+# Every one of these reads get_settings() per request, so a redeploy or a test
+# can change behaviour without rebuilding the app.
 app.add_middleware(AuthMiddleware)
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(DynamicCORSMiddleware)
 
-#the dashboard may be opened straight from disk during development
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(auth_router)
-
-#one engine for the whole process, the dashboard talks to this
-engine = AnalysisEngine()
+# Auth endpoints and the engine API, each mounted twice: the canonical
+# /api/v1/... and the unversioned /api/... alias kept for the dashboard and
+# existing clients (hidden from the OpenAPI schema to avoid duplicate operations).
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api", include_in_schema=False)
+app.include_router(api_router, prefix="/api/v1")
+app.include_router(api_router, prefix="/api", include_in_schema=False)
 
 
 # ---------------------------------------------------------------- dashboard #
@@ -100,14 +91,9 @@ engine = AnalysisEngine()
 
 @app.get("/", include_in_schema=False)
 def dashboard():
-
     index = FRONTEND_DIR / "index.html"
-
     if not index.exists():
-        return JSONResponse(
-            {"project": "ACT", "status": "running", "api": "/docs"}
-        )
-
+        return JSONResponse({"project": "ACT", "status": "running", "api": "/docs"})
     return FileResponse(index)
 
 
@@ -119,376 +105,39 @@ def login_page():
     return FileResponse(page)
 
 
-@app.get("/api/health")
-def health():
-    settings = get_settings()
-    db = check_connection()
-    ok = db["connected"] or not settings.auth_enabled
-    return {
-        "status": "ok" if ok else "degraded",
-        "events": len(engine.store.all()),
-        "auth_enabled": settings.auth_enabled,
-        "database": db,
-    }
-
-
-# ------------------------------------------------------------------ events #
-
-
-@app.get("/api/events")
-def get_events(
-    user: Optional[str] = None,
-    ip: Optional[str] = None,
-    type: Optional[str] = None,
-    search: Optional[str] = None,
-    limit: int = Query(100, ge=0, le=5000),
-    offset: int = Query(0, ge=0),
-):
-    events, total = engine.events(
-        user=user,
-        ip_address=ip,
-        event_type=type,
-        search=search,
-        limit=limit,
-        offset=offset,
-    )
-
-    return {
-        "total": total,
-        "count": len(events),
-        "offset": offset,
-        "events": events_to_list(events),
-    }
-
-
-# --------------------------------------------------------------- behaviors #
-
-
-@app.get("/api/behaviors")
-def get_behaviors(
-    min_risk: int = Query(0, ge=0, le=100),
-    rule: Optional[str] = None,
-    severity: Optional[str] = None,
-    evidence: int = Query(20, ge=0, le=500),
-):
-    behaviors = engine.behaviors(min_risk=min_risk, rule=rule, severity=severity)
-
-    return {
-        "count": len(behaviors),
-        "behaviors": behaviors_to_list(behaviors, evidence_limit=evidence),
-    }
-
-
-@app.get("/api/behaviors/{behavior_id}")
-def get_behavior(behavior_id: str):
-
-    for behavior in engine.behaviors():
-        if behavior.id == behavior_id:
-            return behaviors_to_list([behavior], evidence_limit=0)[0]
-
-    raise HTTPException(status_code=404, detail="Behavior not found")
-
-
-# ------------------------------------------------------------ attack graph #
-
-
-@app.get("/api/attack-graph")
-def get_attack_graph():
-    return engine.attack_graph().to_dict()
-
-
-# ------------------------------------------------------ the AI layer / twin #
-
-
-@app.get("/api/intelligence")
-def get_intelligence():
-    """Prediction, decision, response and narrative for every attacker.
-
-    ACT is always autonomous: once a VM is connected over SSH (``armed`` true),
-    any blocking decision is executed immediately. ``ssh_target`` is the machine
-    ACT will act on.
-    """
-    assessments = assessments_to_list(engine.assessments())   # triggers the refresh
-    data = engine.response_mode()
-    data["assessments"] = assessments
-    return data
-
-
-@app.post("/api/arm")
-def arm(account_lock: bool = False, _role=Depends(require_admin)):
-    """Point ACT's responder at the known SSH machine (normally automatic)."""
-    return engine.arm(allow_account_lock=account_lock)
-
-
-@app.post("/api/disarm")
-def disarm(_role=Depends(require_admin)):
-    """Emergency stand-down: forget the SSH target so nothing executes."""
-    return engine.disarm()
-
-
-@app.post("/api/respond")
-def respond(
-    actor: str = Query(..., description="the attacker's address"),
-    _role=Depends(require_admin),
-):
-    """Carry out the recommended action for one attacker (executes only if armed)."""
-
-    result = engine.respond(actor)
-
-    if result is None:
-        raise HTTPException(status_code=404, detail="No attack path for that actor")
-
-    return response_to_dict(result)
-
-
-# ----------------------------------------------------------------- reports #
-
-
-@app.get("/api/report/{actor}")
-def get_report(
-    actor: str,
-    format: str = Query("html", pattern="^(html|pdf)$"),
-):
-    """Analyst-ready incident report for one attacker.
-
-    ``format=html`` returns a standalone page for preview; ``format=pdf``
-    returns a downloadable PDF with the same content (MITRE ATT&CK techniques,
-    kill-chain stages, event timeline, risk score, confidence, AI contribution
-    and the action ACT took).
-    """
-
-    built = engine.report(actor, fmt=format)
-
-    if built is None:
-        raise HTTPException(status_code=404, detail="No attack path for that actor")
-
-    content, media_type, filename = built
-    disposition = "attachment" if format == "pdf" else "inline"
-
-    return Response(
-        content=content,
-        media_type=media_type,
-        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
-    )
-
-
-# ---------------------------------------------------------- notifications #
-
-
-@app.get("/api/notifications")
-def notifications_status():
-    """Whether critical-attack Telegram alerts are enabled and ready."""
-    return engine.notifier.status()
-
-
-@app.post("/api/notifications/config")
-def notifications_config(
-    enabled: Optional[bool] = None,
-    risk_threshold: Optional[int] = Query(None, ge=0, le=100),
-    _role=Depends(require_analyst),
-):
-    """Enable / disable critical-attack alerting at runtime.
-
-    The bot token and the persistent defaults live in ``backend/.env`` and
-    ``backend/config/detection.json``.
-    """
-    return engine.notifier.configure(enabled=enabled, risk_threshold=risk_threshold)
-
-
-@app.post("/api/notifications/test")
-def notifications_test(_role=Depends(require_analyst)):
-    """Send a test Telegram alert right now."""
-
-    if not engine.notifier.configured:
-        raise HTTPException(
-            status_code=400,
-            detail=("Telegram is not configured. Set TELEGRAM_BOT_TOKEN and "
-                    "TELEGRAM_CHAT_ID in backend/.env."),
-        )
-
-    results = engine.notifier.send_text(
-        "✅ *ACT test alert* — Telegram notifications are wired up correctly."
-    )
-    return {"results": results}
-
-
-# ------------------------------------------------------------------- stats #
-
-
-@app.get("/api/stats")
-def get_stats():
-    return engine.stats()
-
-
-@app.get("/api/logs")
-def get_sample_logs():
-    return {"logs": engine.available_logs()}
-
-
-# ----------------------------------------------------------------- ingest #
-
-
-@app.post("/api/ingest/file")
-def ingest_file(
-    path: str = Query(..., description="log file name or full path"),
-    _role=Depends(require_analyst),
-):
-
-    try:
-        stats = engine.ingest_file(path)
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error))
-
-    return {
-        "lines_read": stats.lines_read,
-        "events_created": stats.events_created,
-        "lines_unmatched": stats.lines_unmatched,
-        "parse_errors": stats.parse_errors,
-        "coverage": stats.coverage,
-    }
-
-
-@app.post("/api/ingest/journal")
-def ingest_journal(
-    since: str = "-24h",
-    unit: Optional[List[str]] = Query(None),
-    _role=Depends(require_analyst),
-):
-    try:
-        stats = engine.ingest_journal(since=since, units=unit)
-    except RuntimeError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-
-    return {
-        "lines_read": stats.lines_read,
-        "events_created": stats.events_created,
-        "coverage": stats.coverage,
-    }
-
-
-@app.post("/api/ingest/ssh")
-def ingest_ssh(
-    host: str = Query(..., description="address of the machine to read, e.g. 192.168.86.130"),
-    user: Optional[str] = Query("kali"),
-    port: int = 22,
-    key_file: Optional[str] = None,
-    since: str = "-24h",
-    sudo: bool = False,
-    unit: Optional[List[str]] = Query(None),
-    _role=Depends(require_analyst),
-):
-    """Read the systemd journal of another machine, for example the Kali VM."""
-
-    try:
-        stats = engine.ingest_ssh(
-            host=host, user=user, port=port, key_file=key_file,
-            since=since, units=unit, use_sudo=sudo,
-        )
-    except RuntimeError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-
-    return {
-        "lines_read": stats.lines_read,
-        "events_created": stats.events_created,
-        "lines_unmatched": stats.lines_unmatched,
-        "coverage": stats.coverage,
-    }
-
-
-@app.post("/api/ssh/test")
-def test_ssh(
-    host: str = Query(...),
-    user: Optional[str] = Query("kali"),
-    port: int = 22,
-    key_file: Optional[str] = None,
-    sudo: bool = False,
-    _role=Depends(require_analyst),
-):
-    """Check the connection to the VM and say exactly what is wrong if it fails."""
-
-    return engine.check_ssh(
-        host=host, user=user, port=port, key_file=key_file, use_sudo=sudo
-    )
-
-
-@app.post("/api/live/start")
-def start_live(
-    file: Optional[str] = None,
-    since: str = "-5m",
-    unit: Optional[List[str]] = Query(None),
-    host: Optional[str] = None,
-    user: Optional[str] = None,
-    port: int = 22,
-    key_file: Optional[str] = None,
-    sudo: bool = False,
-    _role=Depends(require_analyst),
-):
-    started = engine.start_live(
-        file=file, since=since, units=unit,
-        host=host, user=user, port=port, key_file=key_file, use_sudo=sudo,
-    )
-
-    return {
-        "started": started,
-        "source": engine.live_source,
-        "error": engine.live_error,
-    }
-
-
-@app.post("/api/live/stop")
-def stop_live(_role=Depends(require_analyst)):
-    return {"stopped": engine.stop_live()}
-
-
-@app.post("/api/reset")
-def reset(_role=Depends(require_analyst)):
-    engine.reset()
-    return {"status": "cleared"}
-
-
 # ------------------------------------------------------------ live stream #
 
 
 @app.websocket("/api/stream")
+@app.websocket("/api/v1/stream")
 async def stream(websocket: WebSocket):
     """Pushes every new event as it is ingested.
 
-    Deliberately a poll of the engine rather than a callback: the ingestion
-    pipeline runs in its own thread, and reading a growing list from the event
-    loop is far simpler to reason about than pushing across threads.
-
     Auth: pass the access token as ``?token=`` (browsers cannot set an
-    ``Authorization`` header on a WebSocket). Rejected with code 4401 when
-    the token is missing or invalid and auth is enabled.
+    ``Authorization`` header on a WebSocket). Closed with code 4401 when the
+    token is missing or invalid and auth is enabled.
     """
-
     if authenticate_websocket(websocket.query_params.get("token")) is None:
         await websocket.close(code=4401)
         return
 
+    engine = get_engine()
     await websocket.accept()
-
     index = len(engine.store.all())
 
     try:
         await websocket.send_json({"type": "connected", "from_index": index})
-
         while True:
             index, new_events = engine.events_since(index)
-
             if new_events:
-                await websocket.send_json(
-                    {
-                        "type": "events",
-                        "events": events_to_list(new_events),
-                        "total": index,
-                    }
-                )
-
+                await websocket.send_json({
+                    "type": "events",
+                    "events": events_to_list(new_events),
+                    "total": index,
+                })
             await asyncio.sleep(1)
-
     except WebSocketDisconnect:
         return
     except Exception:                                       # noqa: BLE001
-        #a dead socket must never take the server down
+        # a dead socket must never take the server down
         return
