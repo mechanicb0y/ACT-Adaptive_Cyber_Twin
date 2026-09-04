@@ -28,3 +28,8 @@ backend/data/*.db
 backend/data/*.db-journal
 backend/data/*.db-wal
 backend/data/*.db-shm
+
+# Generated TLS material and local Docker overrides.
+backend/data/tls/
+docker-compose.override.yml
+/.env

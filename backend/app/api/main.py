@@ -22,6 +22,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.api.cors import DynamicCORSMiddleware
+from app.api.https import ForceHTTPSMiddleware
 from app.api.deps import get_engine
 from app.api.serializers import events_to_list
 from app.api.v1 import api_router
@@ -76,6 +77,7 @@ app.add_middleware(AuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(DynamicCORSMiddleware)
+app.add_middleware(ForceHTTPSMiddleware)   # outermost: redirect before anything else
 
 # Auth endpoints and the engine API, each mounted twice: the canonical
 # /api/v1/... and the unversioned /api/... alias kept for the dashboard and

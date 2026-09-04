@@ -234,6 +234,32 @@ def build_parser_arguments() -> argparse.ArgumentParser:
         help="run the AI layer: predict, decide, respond (dry run), explain",
     )
 
+    # --- run mode --------------------------------------------------------
+    parser.add_argument(
+        "--mode",
+        choices=["cli", "service"],
+        default="cli",
+        help="'cli' (default) runs the one-shot ingestion pipeline; "
+             "'service' runs the API/dashboard server (uvicorn) in the "
+             "foreground for systemd / a container to supervise",
+    )
+    parser.add_argument(
+        "--bind-host",
+        help="[--mode service] address to bind (default: $ACT_HOST or 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--bind-port", type=int,
+        help="[--mode service] port to bind (default: $ACT_PORT or 8000)",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="[--mode service] uvicorn worker processes (default 1)",
+    )
+    parser.add_argument(
+        "--reload", action="store_true",
+        help="[--mode service] auto-reload on code changes (development only)",
+    )
+
     return parser
 
 
@@ -271,6 +297,13 @@ def run(argv: Optional[list[str]] = None) -> int:
     raw = list(argv) if argv is not None else sys.argv[1:]
 
     args = build_parser_arguments().parse_args(glue_dash_values(raw))
+
+    if args.mode == "service":
+        from app.service import run_service
+        return run_service(
+            host=args.bind_host, port=args.bind_port,
+            workers=args.workers, reload=args.reload,
+        )
 
     reader = build_reader(args)
     parser = LinuxParser(default_host=args.host)
@@ -360,5 +393,10 @@ def run(argv: Optional[list[str]] = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console-script entry point (``act``). See ``backend/pyproject.toml``."""
     raise SystemExit(run())
+
+
+if __name__ == "__main__":
+    main()

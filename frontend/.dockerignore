@@ -1,0 +1,15 @@
+# Build context is the repo root. Only index.html, login.html and nginx.conf
+# are copied; keep everything else out.
+.git
+.gitignore
+backend/
+scripts/
+docs/
+datasets/
+.qa_slides_tmp/
+.venv/
+.venv-*/
+**/__pycache__/
+**/*.log
+.vscode/
+.idea/

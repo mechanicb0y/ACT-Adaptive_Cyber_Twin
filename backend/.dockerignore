@@ -1,0 +1,30 @@
+# Build context is the repo root (see docker-compose.yml), so these paths are
+# repo-root relative.
+.git
+.gitignore
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+.venv/
+.venv-*/
+venv/
+env/
+
+backend/.env
+backend/data/*.db
+backend/data/*.db-*
+backend/data/rag_index.json
+backend/data/tls/
+backend/logs/
+**/*.log
+
+.qa_slides_tmp/
+docs/
+datasets/
+scripts/attacks/*.log
+
+.vscode/
+.idea/

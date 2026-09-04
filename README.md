@@ -129,12 +129,17 @@ ACT/
 │   ├── data/           offline MITRE KB + generated RAG index + local act.db
 │   ├── tests/          pytest suite + sample logs
 │   ├── requirements.txt
+│   ├── Dockerfile      backend image (+ docker-entrypoint.sh: wait for DB, migrate)
+│   ├── pyproject.toml  optional: the `act` console command
 │   ├── .env            local secrets (git-ignored) — see .env.example
 │   └── .env.example    every supported environment variable, documented
-├── frontend/index.html the dashboard  (+ login.html — the sign-in page)
-├── scripts/attacks/    lateral-movement & other simulations
-├── docs/               setup guides + the weekly design write-ups
-└── docker-compose.yml
+├── frontend/           index.html + login.html + Dockerfile + nginx.conf
+├── systemd/            act.service unit (+ act-https.conf drop-in)
+├── windows/            Install-ActService.ps1 (NSSM / Scheduled Task), cert script
+├── scripts/            attack sims + gen-dev-cert.sh + letsencrypt.sh
+├── docs/DEPLOYMENT.md  Docker / systemd / Windows / SSL
+├── docker-compose.yml  backend + frontend + postgres (+ pgadmin, ollama profiles)
+└── .env.docker.example compose configuration
 ```
 
 ---
@@ -253,11 +258,30 @@ python -m app.main --ssh kali@192.168.10.139 --follow          # remote, live
 python -m app.main --file tests/logs/auth_bruteforce.log --json
 ```
 
-### Docker
+### As a service (production)
+
+One process — `python -m app.main --mode service` (alias `act --mode service`) —
+runs uvicorn in the foreground for a supervisor to manage. Four ways to deploy
+it, all covered in **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**:
 
 ```bash
-docker compose up --build      # serves the API + dashboard on :8000
+# Docker Compose — backend + nginx frontend + Postgres (+ optional pgAdmin, Ollama)
+cp .env.docker.example .env      # set ACT_JWT_SECRET, POSTGRES_PASSWORD
+docker compose up -d --build     # dashboard on http://localhost:8080
+
+# systemd (Linux)
+sudo cp systemd/act.service /etc/systemd/system/ && sudo systemctl enable --now act
+
+# Windows service (NSSM or a Scheduled Task)
+.\windows\Install-ActService.ps1 -Method NSSM
+
+# plain
+python -m app.main --mode service        # honours ACT_HOST/ACT_PORT/ACT_SSL_*
 ```
+
+HTTPS: set `ACT_SSL_ENABLED=true` (+ `ACT_SSL_CERT`/`ACT_SSL_KEY`, or ACT makes a
+self-signed dev pair), and `ACT_FORCE_HTTPS=true` to redirect plaintext.
+`scripts/letsencrypt.sh <domain> <email>` issues a real certificate.
 
 ---
 

@@ -1,0 +1,65 @@
+# ACT API / dashboard — systemd unit.
+#
+# Install (as root):
+#   useradd --system --home /opt/act --shell /usr/sbin/nologin act   # if missing
+#   cp -r <repo> /opt/act && chown -R act:act /opt/act
+#   python3 -m venv /opt/act/backend/.venv
+#   /opt/act/backend/.venv/bin/pip install -r /opt/act/backend/requirements.txt
+#   install -m0640 -o act -g act /opt/act/backend/.env.example /opt/act/backend/.env  # then edit
+#   cp <repo>/systemd/act.service /etc/systemd/system/act.service
+#   systemctl daemon-reload && systemctl enable --now act.service
+#   journalctl -u act -f
+#
+# Config is read from /opt/act/backend/.env (see EnvironmentFile). At minimum set
+# ACT_JWT_SECRET and DATABASE_URL there.
+
+[Unit]
+Description=ACT - Adaptive Cyber Twin (API + dashboard)
+Documentation=https://github.com/your-org/act
+After=network-online.target
+Wants=network-online.target
+# Uncomment if ACT uses a local PostgreSQL managed by systemd:
+# After=postgresql.service
+# Requires=postgresql.service
+
+[Service]
+Type=simple
+User=act
+Group=act
+WorkingDirectory=/opt/act/backend
+EnvironmentFile=/opt/act/backend/.env
+Environment=ACT_LOG_FORMAT=json
+Environment=ACT_HOST=127.0.0.1
+Environment=ACT_PORT=8000
+
+ExecStartPre=/opt/act/backend/.venv/bin/python -m alembic upgrade head
+ExecStart=/opt/act/backend/.venv/bin/python -m app.main --mode service
+
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGINT
+
+# Logs go to the journal (journalctl -u act). ACT_LOG_FORMAT=json makes each
+# line structured for `journalctl -u act -o cat | your-shipper`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=act
+
+# --- hardening -----------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/act/backend/data /opt/act/backend/logs
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

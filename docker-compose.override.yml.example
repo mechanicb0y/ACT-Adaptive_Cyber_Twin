@@ -1,0 +1,27 @@
+# Development overrides. Copy to docker-compose.override.yml (git-ignored) and
+# `docker compose up` picks it up automatically on top of docker-compose.yml.
+#
+# Bind-mounts the source for hot reload and drops the image to development mode.
+
+services:
+  act-backend:
+    environment:
+      ACT_ENV: development
+      ACT_LOG_FORMAT: console
+      ACT_RATE_LIMIT_ENABLED: "false"
+    command: ["python", "-m", "app.main", "--mode", "service", "--reload"]
+    volumes:
+      - ./backend:/app
+      - ./frontend:/frontend
+    ports:
+      - "8000:8000"          # reach the API directly, bypassing nginx
+
+  act-frontend:
+    volumes:
+      - ./frontend/index.html:/usr/share/nginx/html/index.html:ro
+      - ./frontend/login.html:/usr/share/nginx/html/login.html:ro
+      - ./frontend/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+
+  postgres:
+    ports:
+      - "5432:5432"          # reach Postgres from the host (psql, a GUI)
