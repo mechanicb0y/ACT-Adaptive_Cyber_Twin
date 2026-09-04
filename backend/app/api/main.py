@@ -212,39 +212,36 @@ def get_report(
 
 @app.get("/api/notifications")
 def notifications_status():
-    """Whether critical-attack alerts (Telegram / Slack) are enabled and ready."""
+    """Whether critical-attack Telegram alerts are enabled and ready."""
     return engine.notifier.status()
 
 
 @app.post("/api/notifications/config")
 def notifications_config(
     enabled: Optional[bool] = None,
-    platform: Optional[str] = Query(None, pattern="^(telegram|slack|both)$"),
     risk_threshold: Optional[int] = Query(None, ge=0, le=100),
 ):
-    """Enable / disable alerting and choose the platform, at runtime.
+    """Enable / disable critical-attack alerting at runtime.
 
-    Tokens and the persistent defaults live in ``backend/.env`` and
+    The bot token and the persistent defaults live in ``backend/.env`` and
     ``backend/config/detection.json``.
     """
-    return engine.notifier.configure(
-        enabled=enabled, platform=platform, risk_threshold=risk_threshold
-    )
+    return engine.notifier.configure(enabled=enabled, risk_threshold=risk_threshold)
 
 
 @app.post("/api/notifications/test")
 def notifications_test():
-    """Send a test alert on every configured transport, right now."""
+    """Send a test Telegram alert right now."""
 
     if not engine.notifier.configured:
         raise HTTPException(
             status_code=400,
-            detail=("No transport configured. Set TELEGRAM_BOT_TOKEN + "
-                    "TELEGRAM_CHAT_ID or SLACK_WEBHOOK_URL in backend/.env."),
+            detail=("Telegram is not configured. Set TELEGRAM_BOT_TOKEN and "
+                    "TELEGRAM_CHAT_ID in backend/.env."),
         )
 
     results = engine.notifier.send_text(
-        "✅ *ACT test alert* — notifications are wired up correctly."
+        "✅ *ACT test alert* — Telegram notifications are wired up correctly."
     )
     return {"results": results}
 

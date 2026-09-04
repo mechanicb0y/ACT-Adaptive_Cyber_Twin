@@ -133,19 +133,23 @@ def time_span(events: Sequence[SecurityEvent]) -> tuple[datetime, datetime]:
 
 
 def events_per_minute(events: Sequence[SecurityEvent]) -> float:
-    #speed of the attack, a human types slowly and a script does not
+    """Speed of the attack. A human types slowly; a script does not.
+
+    Measured over the GAPS between events (n-1 intervals), not the raw count,
+    so a handful of events never reads as a huge sustained rate. Syslog stamps
+    are second-resolution, so a real burst can collapse to a zero span; in that
+    case the divisor is floored at one second and the result is a lower bound
+    on the true rate, not a fabricated multiple of the count.
+    """
 
     if len(events) < 2:
         return 0.0
 
     first, last = time_span(events)
 
-    seconds = (last - first).total_seconds()
+    seconds = max((last - first).total_seconds(), 1.0)
 
-    if seconds <= 0:
-        return float(len(events)) * 60.0
-
-    return len(events) / (seconds / 60.0)
+    return round((len(events) - 1) / (seconds / 60.0), 1)
 
 
 def is_remote_ip(ip_address: str | None) -> bool:

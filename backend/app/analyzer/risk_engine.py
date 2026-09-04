@@ -45,8 +45,18 @@ class RiskEngine:
 
         #3. how fast, a human types slowly and a script does not
         rate = events_per_minute(behavior.evidence)
+        span = behavior.duration_seconds
         if rate >= 30:
-            factors.append(RiskFactor("rate", 15, f"very fast, {rate:.0f} events per minute"))
+            #a sub-2s span means the real rate is unmeasurable (syslog is
+            #second-resolution): state what we actually know instead of an
+            #extrapolated per-minute figure
+            detail = (
+                f"burst: {len(behavior.evidence)} events in "
+                f"{'under a second' if span < 1 else f'{span:.0f} seconds'}"
+                if span < 2
+                else f"very fast, {rate:.0f} events per minute"
+            )
+            factors.append(RiskFactor("rate", 15, detail))
         elif rate >= 10:
             factors.append(RiskFactor("rate", 8, f"automated speed, {rate:.0f} events per minute"))
 

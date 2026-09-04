@@ -1,16 +1,15 @@
 #Instant out-of-band alerts when ACT sees a critical attack (risk >= threshold).
 #
-#Two transports, both plain HTTPS with no SDK:
-#   * Telegram Bot API   -  TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
-#   * Slack Incoming Webhook  -  SLACK_WEBHOOK_URL
+#Transport: Telegram Bot API - TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID, plain
+#HTTPS, no SDK.
 #
 #Design rules, same spirit as the rest of ACT:
-#   * everything degrades gracefully - not enabled, or not configured, and
+#   * everything degrades gracefully - not enabled, or no token, and
 #     notify_critical() is a no-op that never raises;
 #   * one alert per attacker per session (deduped), so a dashboard that polls
 #     every second does not send the same alert 60 times a minute;
-#   * secrets come from the environment (backend/.env) first, then the config
-#     file, so tokens are never committed.
+#   * the token comes from the environment (backend/.env) first, then the
+#     config file, so it is never committed.
 
 import json
 import os
@@ -19,8 +18,6 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
-
-VALID_PLATFORMS = ("telegram", "slack", "both")
 
 
 class Notifier:
@@ -34,22 +31,16 @@ class Notifier:
             except Exception:                               # noqa: BLE001
                 section = {}
 
-        self.enabled = bool(section.get("enabled", False))
-
-        platform = str(section.get("platform", "both")).lower().strip()
-        self.platform = platform if platform in VALID_PLATFORMS else "both"
+        self.enabled = bool(section.get("enabled", True))
 
         self.risk_threshold = int(section.get("risk_threshold", 90))
 
-        #env wins over the config file so real tokens stay out of git
+        #env wins over the config file so a real token stays out of git
         self.telegram_token = (
             os.environ.get("TELEGRAM_BOT_TOKEN") or section.get("telegram_bot_token") or ""
         ).strip()
         self.telegram_chat = str(
             os.environ.get("TELEGRAM_CHAT_ID") or section.get("telegram_chat_id") or ""
-        ).strip()
-        self.slack_webhook = (
-            os.environ.get("SLACK_WEBHOOK_URL") or section.get("slack_webhook_url") or ""
         ).strip()
 
         self.timeout = int(os.environ.get("ACT_NOTIFY_TIMEOUT", section.get("timeout", 8)))
@@ -67,26 +58,12 @@ class Notifier:
         return bool(self.telegram_token and self.telegram_chat)
 
     @property
-    def slack_ready(self) -> bool:
-        return bool(self.slack_webhook)
-
-    def _targets(self) -> List[str]:
-        want = ("telegram", "slack") if self.platform == "both" else (self.platform,)
-        ready = []
-        if "telegram" in want and self.telegram_ready:
-            ready.append("telegram")
-        if "slack" in want and self.slack_ready:
-            ready.append("slack")
-        return ready
-
-    @property
     def configured(self) -> bool:
-        return bool(self._targets())
+        return self.telegram_ready
 
     def configure(
         self,
         enabled: Optional[bool] = None,
-        platform: Optional[str] = None,
         risk_threshold: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Runtime toggle from the dashboard. Persistent config still lives in
@@ -94,10 +71,6 @@ class Notifier:
 
         if enabled is not None:
             self.enabled = bool(enabled)
-        if platform is not None:
-            p = str(platform).lower().strip()
-            if p in VALID_PLATFORMS:
-                self.platform = p
         if risk_threshold is not None:
             self.risk_threshold = max(0, min(100, int(risk_threshold)))
         return self.status()
@@ -105,12 +78,10 @@ class Notifier:
     def status(self) -> Dict[str, Any]:
         return {
             "enabled": self.enabled,
-            "platform": self.platform,
+            "platform": "telegram",
             "risk_threshold": self.risk_threshold,
             "telegram_ready": self.telegram_ready,
-            "slack_ready": self.slack_ready,
             "configured": self.configured,
-            "active_transports": self._targets(),
             "alerts_sent": len(self._sent),
             "last_error": self._last_error,
         }
@@ -124,43 +95,31 @@ class Notifier:
     # sending
     # ------------------------------------------------------------------ #
 
-    def _post(self, url: str, payload: dict, headers: Optional[dict] = None) -> None:
+    def _post(self, url: str, payload: dict) -> None:
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            url, data=data, headers={"content-type": "application/json", **(headers or {})}
+            url, data=data, headers={"content-type": "application/json"}
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             response.read()
 
-    def _send_telegram(self, text: str) -> None:
-        self._post(
-            TELEGRAM_API.format(token=self.telegram_token),
-            {"chat_id": self.telegram_chat, "text": text, "parse_mode": "Markdown",
-             "disable_web_page_preview": True},
-        )
-
-    def _send_slack(self, text: str) -> None:
-        self._post(self.slack_webhook, {"text": text})
-
     def send_text(self, text: str) -> List[Dict[str, Any]]:
-        """Send `text` on every ready transport for the chosen platform.
+        """Send `text` over Telegram. Returns a one-row result list (matching
+        the shape the dashboard expects). Never raises."""
 
-        Returns one result row per transport. Used by notify_critical() and by
-        the dashboard's 'send test' button. Never raises.
-        """
+        if not self.telegram_ready:
+            return []
 
-        results: List[Dict[str, Any]] = []
-        for transport in self._targets():
-            try:
-                if transport == "telegram":
-                    self._send_telegram(text)
-                else:
-                    self._send_slack(text)
-                results.append({"transport": transport, "ok": True})
-            except Exception as error:                      # noqa: BLE001
-                self._last_error = f"{transport}: {error}"
-                results.append({"transport": transport, "ok": False, "error": str(error)})
-        return results
+        try:
+            self._post(
+                TELEGRAM_API.format(token=self.telegram_token),
+                {"chat_id": self.telegram_chat, "text": text, "parse_mode": "Markdown",
+                 "disable_web_page_preview": True},
+            )
+            return [{"transport": "telegram", "ok": True}]
+        except Exception as error:                          # noqa: BLE001
+            self._last_error = f"telegram: {error}"
+            return [{"transport": "telegram", "ok": False, "error": str(error)}]
 
     # ------------------------------------------------------------------ #
 
