@@ -36,11 +36,36 @@ class JournaldReader(BaseLogReader):
 
         self._process: Optional[subprocess.Popen] = None
 
+        #True when we shut the reader down ourselves, so the non zero exit
+        #code that follows is expected and must not be reported as a failure
+        self._stopped = False
+
+    def stop(self) -> None:
+        self._stopped = True
+        self.close()
+
     @staticmethod
     def is_available(journalctl_path: str = "journalctl") -> bool:
         """True when journalctl exists on this machine (Linux with systemd)."""
 
         return shutil.which(journalctl_path) is not None
+
+    def check_available(self) -> None:
+        #overridden by SSHJournalReader, which needs ssh locally, not journalctl
+
+        if not self.is_available(self.journalctl_path):
+            raise RuntimeError(
+                "journalctl was not found on this system. "
+                "Run ACT on a Linux host with systemd, use SSHJournalReader to "
+                "read a remote machine, or use FileLogReader to replay a log file."
+            )
+
+    def describe(self) -> str:
+        return "systemd journal on this machine"
+
+    def explain_failure(self, return_code: int, error: str) -> str:
+        #SSHJournalReader replaces this with advice about connections and keys
+        return f"journalctl exited with code {return_code}: {(error or '').strip()}"
 
     def build_command(self) -> List[str]:
 
@@ -78,12 +103,7 @@ class JournaldReader(BaseLogReader):
 
     def read(self) -> Iterator[str]:
 
-        if not self.is_available(self.journalctl_path):
-            raise RuntimeError(
-                "journalctl was not found on this system. "
-                "Run ACT on a Linux host with systemd, or use "
-                "FileLogReader to replay a captured log file."
-            )
+        self.check_available()
 
         self._process = subprocess.Popen(
             self.build_command(),
@@ -109,11 +129,11 @@ class JournaldReader(BaseLogReader):
 
             return_code = self._process.wait()
 
-            if return_code not in (0, None) and not self.follow:
-                error = (self._process.stderr.read() or "").strip()
-                raise RuntimeError(
-                    f"journalctl exited with code {return_code}: {error}"
-                )
+            #a non zero exit matters in follow mode too: it usually means the
+            #connection died or the user cannot read the journal at all
+            if return_code not in (0, None) and not self._stopped:
+                error = self._process.stderr.read() if self._process.stderr else ""
+                raise RuntimeError(self.explain_failure(return_code, error))
 
         finally:
             self.close()

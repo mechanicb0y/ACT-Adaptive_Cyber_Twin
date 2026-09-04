@@ -19,3 +19,17 @@ build/
 
 # ...except the sample logs the test suite depends on.
 !backend/tests/logs/*.log
+
+# The RAG vector index is generated automatically on first run.
+backend/data/rag_index.json
+
+# Local SQLite database (created on first run; production uses Postgres).
+backend/data/*.db
+backend/data/*.db-journal
+backend/data/*.db-wal
+backend/data/*.db-shm
+
+# Generated TLS material and local Docker overrides.
+backend/data/tls/
+docker-compose.override.yml
+/.env

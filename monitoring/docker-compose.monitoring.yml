@@ -1,0 +1,45 @@
+# Prometheus + Grafana for ACT.
+#
+#   # from the repo root, with the main stack already up (network "act_default")
+#   docker compose -f monitoring/docker-compose.monitoring.yml up -d
+#
+# Grafana: http://localhost:3000  (admin / admin)  - the ACT Overview dashboard
+# and the Prometheus datasource are provisioned automatically.
+
+name: act-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [default, act]
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus]
+    networks: [default]
+
+volumes:
+  prom-data:
+  grafana-data:
+
+networks:
+  # join the main compose stack's network so "act-backend" resolves
+  act:
+    external: true
+    name: act_default

@@ -1,0 +1,77 @@
+{
+  "annotations": { "list": [ { "builtIn": 1, "datasource": { "type": "grafana", "uid": "-- Grafana --" }, "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard" } ] },
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "title": "ACT Overview",
+  "uid": "act-overview",
+  "version": 1,
+  "schemaVersion": 39,
+  "tags": ["act"],
+  "templating": { "list": [] },
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "stat", "title": "Service up", "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "mappings": [ { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } } ], "color": { "mode": "thresholds" } }, "overrides": [] },
+      "targets": [ { "expr": "max(act_up)", "refId": "A" } ]
+    },
+    {
+      "type": "stat", "title": "Active attack paths", "gridPos": { "h": 4, "w": 5, "x": 4, "y": 0 },
+      "targets": [ { "expr": "max(act_active_attack_paths)", "refId": "A" } ]
+    },
+    {
+      "type": "stat", "title": "Compromised paths", "gridPos": { "h": 4, "w": 5, "x": 9, "y": 0 },
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "value": null, "color": "green" }, { "value": 1, "color": "red" } ] }, "color": { "mode": "thresholds" } }, "overrides": [] },
+      "targets": [ { "expr": "max(act_attack_paths_compromised)", "refId": "A" } ]
+    },
+    {
+      "type": "stat", "title": "Attacks detected (total)", "gridPos": { "h": 4, "w": 5, "x": 14, "y": 0 },
+      "targets": [ { "expr": "max(act_attacks_detected_total)", "refId": "A" } ]
+    },
+    {
+      "type": "stat", "title": "Events held", "gridPos": { "h": 4, "w": 5, "x": 19, "y": 0 },
+      "targets": [ { "expr": "max(act_events)", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries", "title": "HTTP request rate by status", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "targets": [ { "expr": "sum by (status) (rate(act_http_requests_total[5m]))", "legendFormat": "{{status}}", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries", "title": "Request latency (rolling p50 / p95 / p99)", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "max(act_http_request_duration_p50_seconds)", "legendFormat": "p50", "refId": "A" },
+        { "expr": "max(act_http_request_duration_p95_seconds)", "legendFormat": "p95", "refId": "B" },
+        { "expr": "max(act_http_request_duration_p99_seconds)", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Block responses (success / failure rate)", "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [ { "expr": "sum by (result) (rate(act_blocks_total[15m]))", "legendFormat": "{{result}}", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries", "title": "Alerts sent", "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "targets": [ { "expr": "sum by (platform, result) (rate(act_alerts_sent_total[15m]))", "legendFormat": "{{platform}} {{result}}", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries", "title": "Login attempts", "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "targets": [ { "expr": "sum by (result) (rate(act_login_attempts_total[15m]))", "legendFormat": "{{result}}", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries", "title": "Engine state (events / behaviours)", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        { "expr": "max(act_events)", "legendFormat": "events", "refId": "A" },
+        { "expr": "max(act_behaviors)", "legendFormat": "behaviours", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "P95 latency by route (histogram)", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [ { "expr": "histogram_quantile(0.95, sum by (le, path) (rate(act_http_request_duration_seconds_bucket[5m])))", "legendFormat": "{{path}}", "refId": "A" } ]
+    }
+  ]
+}

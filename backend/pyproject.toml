@@ -1,0 +1,30 @@
+# Optional packaging for the `act` console command.
+#
+#   cd backend && pip install -e .
+#
+# then `act --file tests/logs/auth_bruteforce.log`  or
+#      `act --mode service`  (runs the API/dashboard server).
+#
+# The test suite and `python -m app.main` / `python -m uvicorn app.api.main:app`
+# do NOT need this - conftest.py puts backend/ on sys.path. Runtime dependencies
+# live in requirements.txt, not here.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "act-adaptive-cyber-twin"
+version = "1.0.0"
+description = "ACT - reads a Linux machine's security logs, understands them, and defends the machine on its own."
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+act = "app.main:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }

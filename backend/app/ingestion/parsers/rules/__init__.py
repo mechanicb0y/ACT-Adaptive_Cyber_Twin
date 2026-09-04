@@ -5,6 +5,9 @@ from app.ingestion.parsers.rules.base_rule import BaseRule
 from app.ingestion.parsers.rules.ssh_accepted_login_rule import (
     SSHAcceptedLoginRule,
 )
+from app.ingestion.parsers.rules.ssh_auth_abort_rule import (
+    SSHAuthAbortRule,
+)
 from app.ingestion.parsers.rules.ssh_failed_login_rule import (
     SSHFailedLoginRule,
 )
@@ -23,6 +26,7 @@ def default_linux_rules() -> list[BaseRule]:
     return [
         SSHFailedLoginRule(),
         SSHInvalidUserRule(),
+        SSHAuthAbortRule(),
         SSHAcceptedLoginRule(),
         SudoAuthFailureRule(),
         SudoCommandRule(),
@@ -33,6 +37,7 @@ def default_linux_rules() -> list[BaseRule]:
 __all__ = [
     "BaseRule",
     "SSHAcceptedLoginRule",
+    "SSHAuthAbortRule",
     "SSHFailedLoginRule",
     "SSHInvalidUserRule",
     "SudoAuthFailureRule",

@@ -1,0 +1,41 @@
+2026-09-01T10:00:00+0000 kali sshd-session[1000]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40000 ssh2 [preauth]
+2026-09-01T10:00:01+0000 kali sshd-session[1001]: Connection closed by authenticating user admin 192.168.10.9 port 40001 [preauth]
+2026-09-01T10:00:02+0000 kali sshd-session[1002]: Failed password for kali from 192.168.10.9 port 40002 ssh2
+2026-09-01T10:00:03+0000 kali sshd-session[1003]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40003 ssh2 [preauth]
+2026-09-01T10:00:04+0000 kali sshd-session[1004]: Connection closed by authenticating user admin 192.168.10.9 port 40004 [preauth]
+2026-09-01T10:00:05+0000 kali sshd-session[1005]: Failed password for kali from 192.168.10.9 port 40005 ssh2
+2026-09-01T10:00:06+0000 kali sshd-session[1006]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40006 ssh2 [preauth]
+2026-09-01T10:00:07+0000 kali sshd-session[1007]: Connection closed by authenticating user admin 192.168.10.9 port 40007 [preauth]
+2026-09-01T10:00:08+0000 kali sshd-session[1008]: Failed password for kali from 192.168.10.9 port 40008 ssh2
+2026-09-01T10:00:09+0000 kali sshd-session[1009]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40009 ssh2 [preauth]
+2026-09-01T10:00:10+0000 kali sshd-session[1010]: Connection closed by authenticating user admin 192.168.10.9 port 40010 [preauth]
+2026-09-01T10:00:11+0000 kali sshd-session[1011]: Failed password for kali from 192.168.10.9 port 40011 ssh2
+2026-09-01T10:00:12+0000 kali sshd-session[1012]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40012 ssh2 [preauth]
+2026-09-01T10:00:13+0000 kali sshd-session[1013]: Connection closed by authenticating user admin 192.168.10.9 port 40013 [preauth]
+2026-09-01T10:00:14+0000 kali sshd-session[1014]: Failed password for kali from 192.168.10.9 port 40014 ssh2
+2026-09-01T10:00:15+0000 kali sshd-session[1015]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40015 ssh2 [preauth]
+2026-09-01T10:00:16+0000 kali sshd-session[1016]: Connection closed by authenticating user admin 192.168.10.9 port 40016 [preauth]
+2026-09-01T10:00:17+0000 kali sshd-session[1017]: Failed password for kali from 192.168.10.9 port 40017 ssh2
+2026-09-01T10:00:18+0000 kali sshd-session[1018]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40018 ssh2 [preauth]
+2026-09-01T10:00:19+0000 kali sshd-session[1019]: Connection closed by authenticating user admin 192.168.10.9 port 40019 [preauth]
+2026-09-01T10:00:20+0000 kali sshd-session[1020]: Failed password for kali from 192.168.10.9 port 40020 ssh2
+2026-09-01T10:00:21+0000 kali sshd-session[1021]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40021 ssh2 [preauth]
+2026-09-01T10:00:22+0000 kali sshd-session[1022]: Connection closed by authenticating user admin 192.168.10.9 port 40022 [preauth]
+2026-09-01T10:00:23+0000 kali sshd-session[1023]: Failed password for kali from 192.168.10.9 port 40023 ssh2
+2026-09-01T10:00:24+0000 kali sshd-session[1024]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40024 ssh2 [preauth]
+2026-09-01T10:00:25+0000 kali sshd-session[1025]: Connection closed by authenticating user admin 192.168.10.9 port 40025 [preauth]
+2026-09-01T10:00:26+0000 kali sshd-session[1026]: Failed password for kali from 192.168.10.9 port 40026 ssh2
+2026-09-01T10:00:27+0000 kali sshd-session[1027]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40027 ssh2 [preauth]
+2026-09-01T10:00:28+0000 kali sshd-session[1028]: Connection closed by authenticating user admin 192.168.10.9 port 40028 [preauth]
+2026-09-01T10:00:29+0000 kali sshd-session[1029]: Failed password for kali from 192.168.10.9 port 40029 ssh2
+2026-09-01T10:00:30+0000 kali sshd-session[1030]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40030 ssh2 [preauth]
+2026-09-01T10:00:31+0000 kali sshd-session[1031]: Connection closed by authenticating user admin 192.168.10.9 port 40031 [preauth]
+2026-09-01T10:00:32+0000 kali sshd-session[1032]: Failed password for kali from 192.168.10.9 port 40032 ssh2
+2026-09-01T10:00:33+0000 kali sshd-session[1033]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40033 ssh2 [preauth]
+2026-09-01T10:00:34+0000 kali sshd-session[1034]: Connection closed by authenticating user admin 192.168.10.9 port 40034 [preauth]
+2026-09-01T10:00:35+0000 kali sshd-session[1035]: Failed password for kali from 192.168.10.9 port 40035 ssh2
+2026-09-01T10:00:36+0000 kali sshd-session[1036]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40036 ssh2 [preauth]
+2026-09-01T10:00:37+0000 kali sshd-session[1037]: Connection closed by authenticating user admin 192.168.10.9 port 40037 [preauth]
+2026-09-01T10:00:38+0000 kali sshd-session[1038]: Failed password for kali from 192.168.10.9 port 40038 ssh2
+2026-09-01T10:00:39+0000 kali sshd-session[1039]: error: maximum authentication attempts exceeded for root from 192.168.10.9 port 40039 ssh2 [preauth]
+2026-09-01T10:00:45+0000 kali sshd-session[2100]: Accepted password for kali from 192.168.10.9 port 40099 ssh2

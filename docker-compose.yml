@@ -1,0 +1,134 @@
+# ACT — full stack.
+#
+#   cp .env.docker.example .env            # edit POSTGRES_PASSWORD / ACT_JWT_SECRET
+#   docker compose up -d --build           # backend + frontend + postgres
+#   docker compose --profile tools up -d   # + pgadmin
+#   docker compose --profile ai    up -d   # + ollama
+#
+# Dashboard: http://localhost:8080   API/docs: http://localhost:8080/docs
+# Dev overrides (hot reload, source bind-mount): see docker-compose.override.yml.example
+
+name: act
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-act}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-act}
+      POSTGRES_DB: ${POSTGRES_DB:-act}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-act} -d ${POSTGRES_DB:-act}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # not published by default; the backend reaches it over the compose network
+    expose:
+      - "5432"
+
+  act-backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ACT_ENV: ${ACT_ENV:-production}
+      ACT_HOST: 0.0.0.0
+      ACT_PORT: "8000"
+      ACT_LOG_FORMAT: json
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-act}:${POSTGRES_PASSWORD:-act}@postgres:5432/${POSTGRES_DB:-act}
+      ACT_AUTH_ENABLED: ${ACT_AUTH_ENABLED:-true}
+      ACT_JWT_SECRET: ${ACT_JWT_SECRET:?set ACT_JWT_SECRET in .env}
+      ACT_ADMIN_USERNAME: ${ACT_ADMIN_USERNAME:-admin}
+      ACT_ADMIN_PASSWORD: ${ACT_ADMIN_PASSWORD:-}
+      ACT_CORS_ORIGINS: ${ACT_CORS_ORIGINS:-http://localhost:8080}
+      ACT_TRUST_FORWARDED_FOR: "true"
+      ACT_METRICS_TOKEN: ${ACT_METRICS_TOKEN:-}
+      ACT_LLM_PROVIDER: ${ACT_LLM_PROVIDER:-}
+      OLLAMA_HOST: ${OLLAMA_HOST:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - act-data:/app/data
+      - act-logs:/app/logs
+      - ./backend/config:/app/config:ro
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+
+  act-frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      act-backend:
+        condition: service_healthy
+    environment:
+      ACT_BACKEND_URL: http://act-backend:8000
+    ports:
+      - "${ACT_HTTP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # ---- optional: DB admin UI  (docker compose --profile tools up) ----------
+  pgadmin:
+    image: dpage/pgadmin4:8
+    profiles: ["tools"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@act.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin:/var/lib/pgadmin
+
+  # ---- optional: local LLM  (docker compose --profile ai up) ---------------
+  # For NVIDIA GPU acceleration, install the NVIDIA Container Toolkit on the host
+  # and uncomment the `deploy:` block below (or run with `--gpus all`).
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ai"]
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    expose:
+      - "11434"
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: ["gpu"]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  pgdata:
+  pgadmin:
+  ollama:
+  act-data:
+  act-logs:

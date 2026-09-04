@@ -1,0 +1,13 @@
+# Optional observability extras — OpenTelemetry tracing + Sentry error reporting.
+#
+#   pip install -r requirements.txt -r requirements-observability.txt
+#
+# ACT runs fine without these: app/core/tracing.py is a logged no-op when the
+# packages are absent or ACT_OTEL_ENABLED / SENTRY_DSN are unset.
+
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-instrumentation-fastapi==0.65b0
+opentelemetry-instrumentation-sqlalchemy==0.65b0
+
+sentry-sdk==2.68.1

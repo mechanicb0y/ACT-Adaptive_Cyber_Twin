@@ -8,7 +8,12 @@ Replay a captured log file:
 
 Read the real machine (Linux with systemd):
 
-    python -m app.main --journal --since "-1h"
+    python -m app.main --journal --since=-1h
+
+Read the Kali virtual machine from Windows, over SSH:
+
+    python -m app.main --ssh kali@192.168.86.130 --since=-1h
+    python -m app.main --ssh kali@192.168.86.130 --follow
 
 Watch the machine live and print events as they appear:
 
@@ -23,27 +28,60 @@ import argparse
 import sys
 from typing import Optional
 
+from app.config import env as _env  # noqa: F401  (loads backend/.env on import)
 from app.analyzer.behavior_correlator import BehaviorCorrelator
 from app.analyzer.normalizer import EventNormalizer
+from app.config.detection_config import DetectionConfig
 from app.ingestion.parsers.linux_parser import LinuxParser
 from app.ingestion.pipeline import IngestionPipeline
 from app.ingestion.readers.base_reader import BaseLogReader
 from app.ingestion.readers.file_log_reader import FileLogReader
 from app.ingestion.readers.journald_reader import JournaldReader
+from app.ingestion.readers.ssh_journald_reader import SSHJournalReader
 from app.storage.event_store import EventStore
 from app.utils.json_printer import print_json
+from app.intelligence.cognitive_twin import CognitiveTwin
+from app.intelligence.llm_analyst import LlmAnalyst
+from app.intelligence.rag.retriever import Retriever
 from app.utils.report_printer import (
     format_event,
+    print_attack_graph,
     print_behaviors,
     print_events,
     print_header,
     print_stats,
+    print_twin,
 )
 
 DEFAULT_IDENTIFIERS = ["sshd", "sshd-session", "sudo", "useradd", "su"]
 
 
+def split_ssh_target(target: str) -> tuple[Optional[str], str]:
+    #accepts "kali@192.168.1.20" or just "192.168.1.20"
+
+    if "@" in target:
+        user, host = target.split("@", 1)
+        return user, host
+
+    return None, target
+
+
 def build_reader(args: argparse.Namespace) -> BaseLogReader:
+
+    if args.ssh:
+        user, host = split_ssh_target(args.ssh)
+
+        return SSHJournalReader(
+            host=host,
+            user=user,
+            port=args.ssh_port,
+            key_file=args.ssh_key,
+            use_sudo=args.ssh_sudo,
+            units=args.unit or None,
+            identifiers=None if args.unit else DEFAULT_IDENTIFIERS,
+            since=args.since,
+            follow=args.follow,
+        )
 
     if args.file:
         return FileLogReader(
@@ -61,6 +99,9 @@ def build_reader(args: argparse.Namespace) -> BaseLogReader:
 
 
 def describe_target(args: argparse.Namespace) -> str:
+
+    if args.ssh:
+        return f"systemd journal on {args.ssh}, since {args.since}"
 
     if args.file:
         return f"file {args.file}"
@@ -90,6 +131,22 @@ def build_parser_arguments() -> argparse.ArgumentParser:
         "--journal",
         action="store_true",
         help="read systemd journal (default when no --file is given)",
+    )
+
+    source.add_argument(
+        "--ssh",
+        metavar="USER@HOST",
+        help="read the journal of another machine over SSH, e.g. kali@192.168.86.130",
+    )
+
+    parser.add_argument("--ssh-port", type=int, default=22, help="SSH port (default 22)")
+
+    parser.add_argument("--ssh-key", help="path to the SSH private key to use")
+
+    parser.add_argument(
+        "--ssh-sudo",
+        action="store_true",
+        help="run journalctl with sudo -n on the remote machine",
     )
 
     parser.add_argument(
@@ -147,17 +204,115 @@ def build_parser_arguments() -> argparse.ArgumentParser:
         help="print the original log line under each evidence event",
     )
 
+    parser.add_argument(
+        "--config",
+        help="detection config file (default config/detection.json)",
+    )
+
+    parser.add_argument(
+        "--no-factors",
+        action="store_true",
+        help="hide the risk score breakdown",
+    )
+
+    parser.add_argument(
+        "--min-risk",
+        type=int,
+        default=0,
+        help="only show behaviors at or above this risk score (default 0)",
+    )
+
+    parser.add_argument(
+        "--graph",
+        action="store_true",
+        help="show the attack path instead of the behavior list",
+    )
+
+    parser.add_argument(
+        "--twin",
+        action="store_true",
+        help="run the AI layer: predict, decide, respond (dry run), explain",
+    )
+
+    # --- run mode --------------------------------------------------------
+    parser.add_argument(
+        "--mode",
+        choices=["cli", "service"],
+        default="cli",
+        help="'cli' (default) runs the one-shot ingestion pipeline; "
+             "'service' runs the API/dashboard server (uvicorn) in the "
+             "foreground for systemd / a container to supervise",
+    )
+    parser.add_argument(
+        "--bind-host",
+        help="[--mode service] address to bind (default: $ACT_HOST or 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--bind-port", type=int,
+        help="[--mode service] port to bind (default: $ACT_PORT or 8000)",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="[--mode service] uvicorn worker processes (default 1)",
+    )
+    parser.add_argument(
+        "--reload", action="store_true",
+        help="[--mode service] auto-reload on code changes (development only)",
+    )
+
     return parser
+
+
+#options that take a value which often starts with a dash, e.g. --since -24h
+_DASH_VALUE_OPTIONS = {"--since"}
+
+
+def glue_dash_values(argv: list[str]) -> list[str]:
+    """Let ``--since -24h`` work, not only ``--since=-24h``.
+
+    argparse treats a value starting with '-' as another flag, so on PowerShell
+    ``--since "-24h"`` fails with "expected one argument". We join those pairs
+    into the ``--since=-24h`` form argparse accepts, before it ever sees them.
+    """
+
+    fixed: list[str] = []
+    i = 0
+
+    while i < len(argv):
+        token = argv[i]
+
+        if token in _DASH_VALUE_OPTIONS and i + 1 < len(argv):
+            fixed.append(f"{token}={argv[i + 1]}")
+            i += 2
+            continue
+
+        fixed.append(token)
+        i += 1
+
+    return fixed
 
 
 def run(argv: Optional[list[str]] = None) -> int:
 
-    args = build_parser_arguments().parse_args(argv)
+    raw = list(argv) if argv is not None else sys.argv[1:]
+
+    args = build_parser_arguments().parse_args(glue_dash_values(raw))
+
+    if args.mode == "service":
+        from app.service import run_service
+        return run_service(
+            host=args.bind_host, port=args.bind_port,
+            workers=args.workers, reload=args.reload,
+        )
 
     reader = build_reader(args)
     parser = LinuxParser(default_host=args.host)
     store = EventStore()
-    correlator = BehaviorCorrelator(store)
+
+    correlator = BehaviorCorrelator(
+        store,
+        config=DetectionConfig.load(args.config),
+    )
 
     on_event = None
 
@@ -188,10 +343,31 @@ def run(argv: Optional[list[str]] = None) -> int:
         print(f"Error. {error}", file=sys.stderr)
         return 1
 
-    behaviors = correlator.detect_brute_force()
+    behaviors = [
+        behavior
+        for behavior in correlator.detect()
+        if behavior.risk_score >= args.min_risk
+    ]
+
+    twin_assessments = None
+    if args.twin:
+        graph = correlator.build_attack_graph(behaviors)
+        #build the AI layer with RAG + local-model-preferred analyst
+        try:
+            retriever = Retriever.build()
+        except Exception:                                   # noqa: BLE001
+            retriever = None
+        twin = CognitiveTwin(analyst=LlmAnalyst(retriever=retriever))
+        twin_assessments = twin.assess(graph, store.all())
 
     if args.json:
-        print_json(behaviors)
+        if args.twin:
+            from app.api.serializers import assessments_to_list
+            print_json(assessments_to_list(twin_assessments))
+        elif args.graph:
+            print_json(correlator.build_attack_graph(behaviors).to_dict())
+        else:
+            print_json(behaviors)
         return 0
 
     print_stats(stats)
@@ -199,14 +375,28 @@ def run(argv: Optional[list[str]] = None) -> int:
     if args.show_events:
         print_events(store.all())
 
+    if args.twin:
+        print_twin(twin_assessments)
+        return 0
+
+    if args.graph:
+        print_attack_graph(correlator.build_attack_graph(behaviors))
+        return 0
+
     print_behaviors(
         behaviors,
         evidence_limit=args.evidence,
         show_raw=args.raw,
+        show_factors=not args.no_factors,
     )
 
     return 0
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console-script entry point (``act``). See ``backend/pyproject.toml``."""
     raise SystemExit(run())
+
+
+if __name__ == "__main__":
+    main()

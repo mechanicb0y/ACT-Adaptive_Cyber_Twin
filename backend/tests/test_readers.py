@@ -5,6 +5,7 @@ import pytest
 
 from app.ingestion.readers.file_log_reader import FileLogReader
 from app.ingestion.readers.journald_reader import JournaldReader
+from app.ingestion.readers.ssh_journald_reader import SSHJournalReader
 
 
 def test_file_reader_reads_every_non_empty_line(tmp_path):
@@ -88,3 +89,80 @@ def test_journald_reports_a_clear_error_when_unavailable():
 
     with pytest.raises(RuntimeError, match="journalctl"):
         list(reader.read())
+
+
+# ----------------------------------------------------- reading the Kali VM #
+
+
+def test_ssh_reader_wraps_the_journalctl_command_in_ssh():
+
+    reader = SSHJournalReader(
+        host="192.168.86.130",
+        user="kali",
+        identifiers=["sshd", "sudo"],
+        since="-1h",
+        follow=True,
+    )
+
+    command = reader.build_command()
+
+    assert command[0] == "ssh"
+    assert "kali@192.168.86.130" in command
+    assert "BatchMode=yes" in command          # never hang on a password prompt
+
+    #the journalctl part is one argument, run by the remote shell
+    remote = command[-1]
+
+    assert remote.startswith("journalctl")
+    assert "-t sshd" in remote
+    assert "-t sudo" in remote
+    assert "--since -1h" in remote
+    assert remote.endswith("-f")
+
+
+def test_ssh_reader_target_with_and_without_a_user():
+
+    assert SSHJournalReader(host="10.0.0.5", user="kali").target == "kali@10.0.0.5"
+    assert SSHJournalReader(host="10.0.0.5").target == "10.0.0.5"
+
+
+def test_ssh_reader_supports_a_port_a_key_and_sudo():
+
+    command = SSHJournalReader(
+        host="10.0.0.5", user="kali", port=2222,
+        key_file="/home/me/.ssh/act", use_sudo=True,
+    ).build_command()
+
+    assert "-p" in command and "2222" in command
+    assert "-i" in command and "/home/me/.ssh/act" in command
+    assert command[-1].startswith("sudo -n journalctl")
+
+
+def test_ssh_reader_needs_ssh_locally_not_journalctl():
+
+    #this is the whole point: ACT can run on Windows, which has no journalctl
+    reader = SSHJournalReader(host="10.0.0.5", ssh_path="not-a-real-ssh-binary")
+
+    with pytest.raises(RuntimeError, match="ssh"):
+        list(reader.read())
+
+
+@pytest.mark.parametrize(
+    "code,stderr,expected",
+    [
+        (255, "connect to host port 22: Connection refused", "virtual machine is running"),
+        (1, "Permission denied (publickey,password).", "ssh-copy-id"),
+        (1, "No journal files were opened due to insufficient permissions.", "systemd-journal"),
+    ],
+)
+def test_ssh_failures_explain_what_to_do(code, stderr, expected):
+
+    reader = SSHJournalReader(host="192.168.86.130", user="kali")
+
+    assert expected in reader.explain_failure(code, stderr)
+
+
+def test_readers_describe_themselves_for_the_dashboard():
+
+    assert "this machine" in JournaldReader().describe()
+    assert "kali@10.0.0.5" in SSHJournalReader(host="10.0.0.5", user="kali").describe()

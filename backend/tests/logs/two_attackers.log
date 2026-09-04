@@ -1,0 +1,22 @@
+Aug  7 02:14:09 kali sshd-session[9101]: Invalid user oracle from 185.220.101.34 port 40122
+Aug  7 02:14:09 kali sshd-session[9101]: Failed password for invalid user oracle from 185.220.101.34 port 40122 ssh2
+Aug  7 02:14:12 kali sshd-session[9103]: Invalid user postgres from 185.220.101.34 port 40126
+Aug  7 02:14:12 kali sshd-session[9103]: Failed password for invalid user postgres from 185.220.101.34 port 40126 ssh2
+Aug  7 02:14:15 kali sshd-session[9105]: Invalid user jenkins from 185.220.101.34 port 40130
+Aug  7 02:14:15 kali sshd-session[9105]: Failed password for invalid user jenkins from 185.220.101.34 port 40130 ssh2
+Aug  7 02:14:18 kali sshd-session[9109]: Failed password for root from 185.220.101.34 port 40134 ssh2
+Aug  7 02:14:20 kali sshd-session[9109]: Failed password for root from 185.220.101.34 port 40134 ssh2
+Aug  7 02:14:22 kali sshd-session[9109]: Failed password for root from 185.220.101.34 port 40134 ssh2
+Aug  7 02:14:24 kali sshd-session[9112]: Failed password for root from 185.220.101.34 port 40138 ssh2
+Aug  7 02:14:26 kali sshd-session[9112]: Failed password for root from 185.220.101.34 port 40138 ssh2
+Aug  7 02:14:28 kali sshd-session[9112]: Failed password for root from 185.220.101.34 port 40138 ssh2
+Aug  7 02:14:30 kali sshd-session[9112]: error: maximum authentication attempts exceeded for root from 185.220.101.34 port 40138 ssh2 [preauth]
+Aug  7 09:41:02 kali sshd-session[9450]: Failed password for devops from 10.10.10.22 port 55012 ssh2
+Aug  7 09:41:05 kali sshd-session[9450]: Failed password for devops from 10.10.10.22 port 55012 ssh2
+Aug  7 09:41:08 kali sshd-session[9450]: Failed password for devops from 10.10.10.22 port 55012 ssh2
+Aug  7 09:41:11 kali sshd-session[9453]: Failed password for devops from 10.10.10.22 port 55016 ssh2
+Aug  7 09:41:14 kali sshd-session[9453]: Failed password for devops from 10.10.10.22 port 55016 ssh2
+Aug  7 09:41:19 kali sshd-session[9458]: Accepted password for devops from 10.10.10.22 port 55020 ssh2
+Aug  7 09:41:19 kali sshd-session[9458]: pam_unix(sshd:session): session opened for user devops(uid=1002) by devops(uid=0)
+Aug  7 09:42:03 kali sudo[9502]:     devops : TTY=pts/2 ; PWD=/home/devops ; USER=root ; COMMAND=/usr/bin/cat /etc/passwd
+Aug  7 09:45:31 kali sshd-session[9458]: pam_unix(sshd:session): session closed for user devops
