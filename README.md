@@ -38,7 +38,7 @@ logs ─▶ parse ─▶ normalise ─▶ correlate ─▶ risk score ─▶ MIT
    - [Ollama (local AI, optional)](#c-ollama--local-ai-optional)
 5. [Running ACT](#running-act)
 6. [Incident reports](#incident-reports)
-7. [Alerts (Telegram / Slack)](#alerts--telegram--slack)
+7. [Alerts (Telegram)](#alerts--telegram)
 8. [Attack simulations](#attack-simulations)
 9. [Testing](#testing)
 10. [Configuration reference](#configuration-reference)
@@ -61,7 +61,7 @@ logs ─▶ parse ─▶ normalise ─▶ correlate ─▶ risk score ─▶ MIT
 | **Autonomous response** | When armed against an SSH host, ACT runs a reversible `iptables` block itself above its confidence threshold. Account lock / host isolation are advisory only. Off by default (simulation mode). |
 | **Local AI narrator** | Ollama (preferred) / Gemini / Anthropic / built-in template, grounded in a local RAG knowledge base. |
 | **Incident reports** | Per-attacker **HTML** (preview) and **PDF** (download): MITRE techniques, kill-chain stages, event timeline, risk, confidence, AI contribution, actions taken. PDF needs no third-party library. |
-| **Alerts** | Instant **Telegram** and/or **Slack** notification when a critical attack is detected (risk ≥ threshold). |
+| **Alerts** | Instant **Telegram** notification when a critical attack is detected (risk ≥ threshold). Enabled by default. |
 | **Dashboard** | Single-file dark ops console at `/`, live WebSocket event feed. |
 | **REST API** | Everything the dashboard uses, documented at `/docs`. |
 
@@ -89,7 +89,7 @@ backend/app/
 │   ├── llm_analyst         Ollama/Gemini/Anthropic: risk judgment + narrative
 │   ├── decision_engine     stats ⊕ AI vote → Decision (block/alert/monitor)
 │   ├── cognitive_twin      predict → decide → respond → explain, per attacker
-│   ├── notifier            Telegram / Slack critical alerts
+│   ├── notifier            Telegram critical alerts
 │   ├── response/           reversible commands + dry-run / SSH responder
 │   └── rag/                local embeddings + vector store for grounding
 ├── reporting/          AttackPath + assessment → HTML / PDF incident report
@@ -120,11 +120,15 @@ scripts/attacks/        end-to-end attack simulations
 ACT/
 ├── backend/            Python: pipeline, API, tests
 │   ├── app/            source (see Architecture)
+│   │   ├── core/       service infrastructure: settings, structured logging
+│   │   └── db/         SQLAlchemy models + engine (optional durable store)
+│   ├── alembic/        database schema migrations
 │   ├── config/detection.json   thresholds, windows, response & alert settings
-│   ├── data/           offline MITRE KB + generated RAG index
+│   ├── data/           offline MITRE KB + generated RAG index + local act.db
 │   ├── tests/          pytest suite + sample logs
 │   ├── requirements.txt
-│   └── .env            local secrets (git-ignored) — see below
+│   ├── .env            local secrets (git-ignored) — see .env.example
+│   └── .env.example    every supported environment variable, documented
 ├── frontend/index.html the dashboard
 ├── scripts/attacks/    lateral-movement & other simulations
 ├── docs/               setup guides + the weekly design write-ups
@@ -167,7 +171,6 @@ OLLAMA_MODEL=llama3.2
 # --- Critical alerts (optional) ---
 # TELEGRAM_BOT_TOKEN=123456:AA...
 # TELEGRAM_CHAT_ID=123456789
-# SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxxx
 ```
 
 Verify:
@@ -256,6 +259,40 @@ docker compose up --build      # serves the API + dashboard on :8000
 
 ---
 
+## Database & migrations
+
+The detection pipeline still runs in memory. Alongside it, `backend/app/db/`
+adds an **optional durable store** — SQLAlchemy models for users, events,
+behaviours, attack paths, responses, reports, alerts, runtime config and the
+audit trail.
+
+- **Default (dev / tests):** SQLite at `backend/data/act.db`. Zero setup.
+- **Production:** set `DATABASE_URL` to a `postgresql+psycopg://…` URL and
+  install the driver (`pip install "psycopg[binary]"`, or uncomment it in
+  `requirements.txt`). Connection pooling, `pool_pre_ping`, and connect-time
+  retry (for a database container that is still starting) are built in.
+
+Schema is versioned with **Alembic**:
+
+```bash
+cd backend
+python -m alembic upgrade head              # apply migrations (any database)
+python -m alembic revision --autogenerate -m "add X"   # after a model change
+python -m alembic downgrade -1              # roll back one revision
+```
+
+Migrations use batch mode, so the same history applies to SQLite and Postgres.
+`backend/.env.example` documents every `ACT_DB_*` and `ACT_LOG_*` variable.
+
+### Logging
+
+`ACT_LOG_FORMAT=json` switches the service to one-JSON-object-per-line output
+for journald / Docker / a log shipper; `ACT_LOG_FILE` adds a rotating file
+handler. `console` (the default) is the short human format the CLI has always
+printed.
+
+---
+
 ## Incident reports
 
 Every attack path can be exported as an analyst-ready report containing MITRE
@@ -276,23 +313,25 @@ also prints cleanly to PDF from the browser.
 
 ---
 
-## Alerts — Telegram / Slack
+## Alerts — Telegram
 
-ACT can fire an instant notification the moment a **critical** attack is
-detected (decision risk ≥ `risk_threshold`, default **90**). The message
+ACT fires an instant **Telegram** notification the moment a **critical** attack
+is detected (decision risk ≥ `risk_threshold`, default **90**). The message
 includes the attacker address, the target, the attack type, the risk score and
 a short summary. Each attacker is alerted once per session.
 
-1. **Configure a transport** in `backend/.env`:
-   - Telegram: `TELEGRAM_BOT_TOKEN` (from [@BotFather](https://t.me/BotFather))
-     and `TELEGRAM_CHAT_ID` (your chat/channel id).
-   - Slack: `SLACK_WEBHOOK_URL` (an Incoming Webhook).
-2. **Enable** in `backend/config/detection.json` → `notifications` (`enabled`,
-   `platform`: `telegram` / `slack` / `both`, `risk_threshold`), or at runtime
-   from the dashboard's **Critical Alerts** panel, or:
+Alerting is **enabled by default**; it simply does nothing until a bot is
+configured.
+
+1. **Add the bot** in `backend/.env`: `TELEGRAM_BOT_TOKEN` (from
+   [@BotFather](https://t.me/BotFather)) and `TELEGRAM_CHAT_ID` (your
+   chat/channel id).
+2. Tune or toggle in `backend/config/detection.json` → `notifications`
+   (`enabled`, `risk_threshold`), from the dashboard's **Critical Alerts**
+   panel, or:
    ```
-   POST /api/notifications/config?enabled=true&platform=both
-   POST /api/notifications/test        # send a test on every configured transport
+   POST /api/notifications/config?enabled=true
+   POST /api/notifications/test        # send a test Telegram alert
    GET  /api/notifications             # status
    ```
 
@@ -347,7 +386,7 @@ never reach a real model. Key files:
 | `test_decision_ai.py` | the local AI's influence on the decision |
 | `test_lateral_movement.py` | multi-stage internal attack detection |
 | `test_reporting.py` | HTML + PDF report generation |
-| `test_notifier.py` | Telegram / Slack alerting (HTTP mocked) |
+| `test_notifier.py` | Telegram alerting (HTTP mocked) |
 | `test_correlation_rules.py`, `test_risk_engine.py`, `test_attack_graph.py`, … | each pipeline stage |
 
 Adding a feature means adding a test in the matching file.
@@ -365,12 +404,12 @@ Adding a feature means adding a test in the matching file.
 | `response.alert_threshold` | risk at/above which a non-pattern is still worth an alert |
 | `response.auto_execute_confidence` | confidence bar to recommend **and** (armed) carry out a block |
 | `response.allow_account_lock` | let the armed responder also lock accounts |
-| `notifications.enabled` / `platform` / `risk_threshold` | critical-alert transport and trigger |
+| `notifications.enabled` / `risk_threshold` | critical-alert toggle (on by default) and trigger score |
 | `rules.<name>.enabled` / `threshold` / `window_seconds` | per-correlation-rule tuning |
 
 Environment (`backend/.env`): `OLLAMA_MODEL`, `OLLAMA_PATH`, `ACT_LLM_PROVIDER`,
 `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `ACT_LLM_TIMEOUT`, `TELEGRAM_BOT_TOKEN`,
-`TELEGRAM_CHAT_ID`, `SLACK_WEBHOOK_URL`, `ACT_NOTIFY_TIMEOUT`.
+`TELEGRAM_CHAT_ID`, `ACT_NOTIFY_TIMEOUT`.
 
 ---
 
@@ -386,7 +425,7 @@ Environment (`backend/.env`): `OLLAMA_MODEL`, `OLLAMA_PATH`, `ACT_LLM_PROVIDER`,
 | AI never influences the decision | Expected without a model. With Ollama running, check `intelligence.provider` in `/api/stats`. |
 | Blocks don't execute | ACT must be **armed** (a VM connected over SSH) and the decision must clear `auto_execute_confidence`. Account lock / isolation are advisory by design. |
 | PDF report won't open | It's a minimal PDF — try a real reader (Acrobat, Chrome, Edge), not a thumbnailer. The HTML report is the rich version. |
-| Telegram/Slack test fails | `GET /api/notifications` shows `*_ready`. Re-check the token / webhook in `.env` and restart. `last_error` carries the transport error. |
+| Telegram test fails | `GET /api/notifications` shows `telegram_ready`. Re-check `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` in `.env` and restart. `last_error` carries the API error. |
 | `ollama` not found though installed | Set `OLLAMA_PATH` in `.env` to its install dir, or open a fresh terminal. |
 
 ---

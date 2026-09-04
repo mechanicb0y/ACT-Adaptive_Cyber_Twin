@@ -18,15 +18,33 @@ from app.ingestion.parsers.linux_parser import LinuxParser  # noqa: E402
 from app.storage.event_store import EventStore  # noqa: E402
 
 
+#Secrets and deployment pointers that backend/.env may hold. Since the core
+#modules now load .env on import (app.core.settings -> app.config.env), those
+#values would otherwise leak into the suite and make tests depend on the dev
+#machine's .env. Strip them for every test; a test that needs one sets it itself.
+_NEUTRALISED_ENV = (
+    "ACT_LLM_PROVIDER",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "GEMINI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "DATABASE_URL",
+    "ACT_LOG_FILE",
+)
+
+
 @pytest.fixture(autouse=True)
-def _no_local_llm(monkeypatch):
-    """Keep the suite hermetic.
+def _hermetic_env(monkeypatch):
+    """Keep the suite hermetic and independent of ``backend/.env``.
 
     ``LlmAnalyst`` auto-detects a local Ollama when one is reachable, which would
     make tests hit a real model - slow, and dependent on what is installed on the
-    dev machine. Default every test to the no-LLM path; a test that wants a
-    provider still sets ``ACT_LLM_PROVIDER`` itself and that wins.
+    dev machine. Force the no-LLM path, and clear the alert / cloud-key / DB
+    variables so a populated ``.env`` cannot change a test's outcome. A test that
+    wants any of these sets it explicitly and that wins.
     """
+    for name in _NEUTRALISED_ENV:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ACT_LLM_PROVIDER", "none")
 
 
@@ -53,3 +71,31 @@ def normalizer() -> EventNormalizer:
 @pytest.fixture
 def store() -> EventStore:
     return EventStore()
+
+
+@pytest.fixture
+def db_session(monkeypatch, tmp_path):
+    """A throwaway SQLite database in a temp file, one per test.
+
+    A file (not ``:memory:``) so a second session or a bare ``engine.connect()``
+    in the same test sees the same data without fighting over one shared
+    connection. ``reset_engine`` / ``reload_settings`` on the way in and out keep
+    the process-wide caches from leaking between tests.
+    """
+    from app.core.settings import reload_settings
+    from app.db import get_sessionmaker, init_db, reset_engine
+
+    db_path = tmp_path / "act_test.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path.as_posix()}")
+    reload_settings()
+    reset_engine()
+    init_db()
+
+    session = get_sessionmaker()()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
+        reset_engine()
+        reload_settings()

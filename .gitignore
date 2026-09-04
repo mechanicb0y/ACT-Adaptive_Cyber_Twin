@@ -22,3 +22,9 @@ build/
 
 # The RAG vector index is generated automatically on first run.
 backend/data/rag_index.json
+
+# Local SQLite database (created on first run; production uses Postgres).
+backend/data/*.db
+backend/data/*.db-journal
+backend/data/*.db-wal
+backend/data/*.db-shm
