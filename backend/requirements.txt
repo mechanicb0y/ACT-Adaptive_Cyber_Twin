@@ -19,6 +19,11 @@ alembic==1.19.1
 # Postgres driver — only needed when DATABASE_URL is postgresql://
 # psycopg[binary]==3.2.3
 
+# Authentication (app/auth/) — local username/password + JWT sessions + RBAC.
+# OAuth2 (Google/GitHub) uses httpx directly; no extra dependency.
+bcrypt==4.3.0
+PyJWT==2.13.0
+
 # Testing
 pytest==8.3.4
 

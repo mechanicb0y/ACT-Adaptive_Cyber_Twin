@@ -94,6 +94,54 @@ class Settings:
     host: str = field(default_factory=lambda: _str("ACT_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: _int("ACT_PORT", 8000))
 
+    # --- authentication ----------------------------------------------------
+    # On by default: every /api route needs a bearer token except the auth
+    # endpoints and /api/health. Set ACT_AUTH_ENABLED=false only for the old
+    # single-user prototype mode (the test suite does this).
+    auth_enabled: bool = field(default_factory=lambda: _bool("ACT_AUTH_ENABLED", True))
+    jwt_secret: Optional[str] = field(default_factory=lambda: _opt("ACT_JWT_SECRET"))
+    jwt_algorithm: str = field(default_factory=lambda: _str("ACT_JWT_ALGORITHM", "HS256"))
+    access_token_ttl_minutes: int = field(
+        default_factory=lambda: _int("ACT_ACCESS_TOKEN_TTL_MIN", 30)
+    )
+    refresh_token_ttl_days: int = field(
+        default_factory=lambda: _int("ACT_REFRESH_TOKEN_TTL_DAYS", 7)
+    )
+    refresh_token_remember_days: int = field(
+        default_factory=lambda: _int("ACT_REFRESH_TOKEN_REMEMBER_DAYS", 30)
+    )
+    # First-run admin. If the password is unset one is generated and logged once.
+    bootstrap_admin_username: str = field(
+        default_factory=lambda: _str("ACT_ADMIN_USERNAME", "admin")
+    )
+    bootstrap_admin_password: Optional[str] = field(
+        default_factory=lambda: _opt("ACT_ADMIN_PASSWORD")
+    )
+
+    # --- OAuth2 (scaffold; inert unless a client id + secret are set) ------
+    oauth_google_client_id: Optional[str] = field(
+        default_factory=lambda: _opt("ACT_OAUTH_GOOGLE_CLIENT_ID")
+    )
+    oauth_google_client_secret: Optional[str] = field(
+        default_factory=lambda: _opt("ACT_OAUTH_GOOGLE_CLIENT_SECRET")
+    )
+    oauth_github_client_id: Optional[str] = field(
+        default_factory=lambda: _opt("ACT_OAUTH_GITHUB_CLIENT_ID")
+    )
+    oauth_github_client_secret: Optional[str] = field(
+        default_factory=lambda: _opt("ACT_OAUTH_GITHUB_CLIENT_SECRET")
+    )
+    oauth_redirect_base_url: Optional[str] = field(
+        default_factory=lambda: _opt("ACT_OAUTH_REDIRECT_BASE_URL")
+    )
+    # Comma-separated allowlist of email domains for first-time OAuth sign-ins.
+    oauth_allowed_domains: str = field(
+        default_factory=lambda: _str("ACT_OAUTH_ALLOWED_DOMAINS", "")
+    )
+    oauth_default_role: str = field(
+        default_factory=lambda: _str("ACT_OAUTH_DEFAULT_ROLE", "viewer")
+    )
+
     # --- SSL (wired up in a later phase; recorded here so one loader owns it) --
     ssl_enabled: bool = field(default_factory=lambda: _bool("ACT_SSL_ENABLED", False))
     ssl_cert: Optional[str] = field(default_factory=lambda: _opt("ACT_SSL_CERT"))
@@ -103,6 +151,23 @@ class Settings:
     @property
     def is_production(self) -> bool:
         return self.env.lower() in {"production", "prod"}
+
+    @property
+    def oauth_providers(self) -> dict[str, tuple[str, str]]:
+        """``{provider: (client_id, client_secret)}`` for fully-configured ones."""
+        out: dict[str, tuple[str, str]] = {}
+        if self.oauth_google_client_id and self.oauth_google_client_secret:
+            out["google"] = (self.oauth_google_client_id,
+                             self.oauth_google_client_secret)
+        if self.oauth_github_client_id and self.oauth_github_client_secret:
+            out["github"] = (self.oauth_github_client_id,
+                             self.oauth_github_client_secret)
+        return out
+
+    @property
+    def oauth_allowed_domain_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.oauth_allowed_domains.split(",")
+                if d.strip()]
 
     @property
     def is_sqlite(self) -> bool:

@@ -12,12 +12,22 @@
 #and  http://127.0.0.1:8000/docs for the generated API documentation.
 
 import asyncio
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
 
 from app.config import env as _env  # noqa: F401  (loads backend/.env on import)
 
-from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -28,14 +38,48 @@ from app.api.serializers import (
     events_to_list,
     response_to_dict,
 )
+from app.auth import service as auth_service
+from app.auth.dependencies import require_admin, require_analyst
+from app.auth.middleware import AuthMiddleware, authenticate_websocket
+from app.auth.router import router as auth_router
+from app.core.logging import configure_logging
+from app.core.settings import get_settings
+from app.db.session import check_connection, get_sessionmaker, init_db
+
+log = logging.getLogger("app.api")
 
 FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    configure_logging()
+    settings = get_settings()
+    try:
+        init_db()  # create_all for SQLite; a no-op once Alembic has run on PG
+    except Exception:  # noqa: BLE001  (a broken DB must not stop the read-only demo)
+        log.exception("database init failed; auth endpoints will error until fixed")
+    if settings.auth_enabled:
+        try:
+            with get_sessionmaker()() as session:
+                auth_service.bootstrap_admin(session)
+                session.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("admin bootstrap failed")
+    else:
+        log.warning("ACT_AUTH_ENABLED=false - every request runs as admin")
+    yield
+
 
 app = FastAPI(
     title="ACT - Adaptive Cyber Twin",
     description="Linux security log ingestion, behavior correlation, risk scoring, MITRE ATT&CK mapping and attack graphs.",
     version="1.0.0",
+    lifespan=lifespan,
 )
+
+#every /api route needs a bearer token except /api/auth/* and /api/health
+app.add_middleware(AuthMiddleware)
 
 #the dashboard may be opened straight from disk during development
 app.add_middleware(
@@ -44,6 +88,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
 
 #one engine for the whole process, the dashboard talks to this
 engine = AnalysisEngine()
@@ -65,9 +111,25 @@ def dashboard():
     return FileResponse(index)
 
 
+@app.get("/login", include_in_schema=False)
+def login_page():
+    page = FRONTEND_DIR / "login.html"
+    if not page.exists():
+        return JSONResponse({"detail": "login page not found"}, status_code=404)
+    return FileResponse(page)
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "events": len(engine.store.all())}
+    settings = get_settings()
+    db = check_connection()
+    ok = db["connected"] or not settings.auth_enabled
+    return {
+        "status": "ok" if ok else "degraded",
+        "events": len(engine.store.all()),
+        "auth_enabled": settings.auth_enabled,
+        "database": db,
+    }
 
 
 # ------------------------------------------------------------------ events #
@@ -153,19 +215,22 @@ def get_intelligence():
 
 
 @app.post("/api/arm")
-def arm(account_lock: bool = False):
+def arm(account_lock: bool = False, _role=Depends(require_admin)):
     """Point ACT's responder at the known SSH machine (normally automatic)."""
     return engine.arm(allow_account_lock=account_lock)
 
 
 @app.post("/api/disarm")
-def disarm():
+def disarm(_role=Depends(require_admin)):
     """Emergency stand-down: forget the SSH target so nothing executes."""
     return engine.disarm()
 
 
 @app.post("/api/respond")
-def respond(actor: str = Query(..., description="the attacker's address")):
+def respond(
+    actor: str = Query(..., description="the attacker's address"),
+    _role=Depends(require_admin),
+):
     """Carry out the recommended action for one attacker (executes only if armed)."""
 
     result = engine.respond(actor)
@@ -220,6 +285,7 @@ def notifications_status():
 def notifications_config(
     enabled: Optional[bool] = None,
     risk_threshold: Optional[int] = Query(None, ge=0, le=100),
+    _role=Depends(require_analyst),
 ):
     """Enable / disable critical-attack alerting at runtime.
 
@@ -230,7 +296,7 @@ def notifications_config(
 
 
 @app.post("/api/notifications/test")
-def notifications_test():
+def notifications_test(_role=Depends(require_analyst)):
     """Send a test Telegram alert right now."""
 
     if not engine.notifier.configured:
@@ -263,7 +329,10 @@ def get_sample_logs():
 
 
 @app.post("/api/ingest/file")
-def ingest_file(path: str = Query(..., description="log file name or full path")):
+def ingest_file(
+    path: str = Query(..., description="log file name or full path"),
+    _role=Depends(require_analyst),
+):
 
     try:
         stats = engine.ingest_file(path)
@@ -283,6 +352,7 @@ def ingest_file(path: str = Query(..., description="log file name or full path")
 def ingest_journal(
     since: str = "-24h",
     unit: Optional[List[str]] = Query(None),
+    _role=Depends(require_analyst),
 ):
     try:
         stats = engine.ingest_journal(since=since, units=unit)
@@ -305,6 +375,7 @@ def ingest_ssh(
     since: str = "-24h",
     sudo: bool = False,
     unit: Optional[List[str]] = Query(None),
+    _role=Depends(require_analyst),
 ):
     """Read the systemd journal of another machine, for example the Kali VM."""
 
@@ -331,6 +402,7 @@ def test_ssh(
     port: int = 22,
     key_file: Optional[str] = None,
     sudo: bool = False,
+    _role=Depends(require_analyst),
 ):
     """Check the connection to the VM and say exactly what is wrong if it fails."""
 
@@ -349,6 +421,7 @@ def start_live(
     port: int = 22,
     key_file: Optional[str] = None,
     sudo: bool = False,
+    _role=Depends(require_analyst),
 ):
     started = engine.start_live(
         file=file, since=since, units=unit,
@@ -363,12 +436,12 @@ def start_live(
 
 
 @app.post("/api/live/stop")
-def stop_live():
+def stop_live(_role=Depends(require_analyst)):
     return {"stopped": engine.stop_live()}
 
 
 @app.post("/api/reset")
-def reset():
+def reset(_role=Depends(require_analyst)):
     engine.reset()
     return {"status": "cleared"}
 
@@ -383,7 +456,15 @@ async def stream(websocket: WebSocket):
     Deliberately a poll of the engine rather than a callback: the ingestion
     pipeline runs in its own thread, and reading a growing list from the event
     loop is far simpler to reason about than pushing across threads.
+
+    Auth: pass the access token as ``?token=`` (browsers cannot set an
+    ``Authorization`` header on a WebSocket). Rejected with code 4401 when
+    the token is missing or invalid and auth is enabled.
     """
+
+    if authenticate_websocket(websocket.query_params.get("token")) is None:
+        await websocket.close(code=4401)
+        return
 
     await websocket.accept()
 

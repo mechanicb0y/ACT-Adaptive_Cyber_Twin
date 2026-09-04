@@ -30,6 +30,12 @@ _NEUTRALISED_ENV = (
     "ANTHROPIC_API_KEY",
     "DATABASE_URL",
     "ACT_LOG_FILE",
+    "ACT_ADMIN_PASSWORD",
+    "ACT_OAUTH_GOOGLE_CLIENT_ID",
+    "ACT_OAUTH_GOOGLE_CLIENT_SECRET",
+    "ACT_OAUTH_GITHUB_CLIENT_ID",
+    "ACT_OAUTH_GITHUB_CLIENT_SECRET",
+    "ACT_OAUTH_ALLOWED_DOMAINS",
 )
 
 
@@ -39,13 +45,19 @@ def _hermetic_env(monkeypatch):
 
     ``LlmAnalyst`` auto-detects a local Ollama when one is reachable, which would
     make tests hit a real model - slow, and dependent on what is installed on the
-    dev machine. Force the no-LLM path, and clear the alert / cloud-key / DB
-    variables so a populated ``.env`` cannot change a test's outcome. A test that
-    wants any of these sets it explicitly and that wins.
+    dev machine. Force the no-LLM path, clear the alert / cloud-key / DB / OAuth
+    variables so a populated ``.env`` cannot change a test's outcome, and default
+    authentication OFF (the historic prototype behaviour every non-auth test
+    expects). ``test_auth.py`` turns auth back on explicitly.
     """
     for name in _NEUTRALISED_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ACT_LLM_PROVIDER", "none")
+    monkeypatch.setenv("ACT_AUTH_ENABLED", "false")
+    monkeypatch.setenv("ACT_JWT_SECRET", "test-secret-not-for-production-0123456789")
+
+    from app.core.settings import reload_settings
+    reload_settings()
 
 
 @pytest.fixture

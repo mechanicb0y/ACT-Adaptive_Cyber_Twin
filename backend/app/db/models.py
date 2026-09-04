@@ -92,6 +92,30 @@ class RefreshToken(Base):
     )
 
 
+class OAuthHandoff(Base):
+    """One-time code bridging an OAuth callback redirect and the SPA.
+
+    The callback cannot hand the SPA a token in the URL (it would land in
+    browser history), so it stores this short-lived, single-use row and sets an
+    httpOnly cookie holding the raw code. The SPA immediately trades it via
+    ``POST /api/auth/oauth/complete``.
+    """
+
+    __tablename__ = "oauth_handoffs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    remember_me: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[_dt.datetime] = _ts(default=utcnow, nullable=False)
+    expires_at: Mapped[_dt.datetime] = _ts(nullable=False)
+    consumed_at: Mapped[Optional[_dt.datetime]] = _ts()
+
+    user: Mapped[User] = relationship()
+
+
 # ------------------------------------------------------------------- events #
 
 
@@ -220,6 +244,6 @@ class AuditLog(Base):
 
 
 ALL_MODELS = [
-    User, RefreshToken, Event, Behavior, AttackPath,
+    User, RefreshToken, OAuthHandoff, Event, Behavior, AttackPath,
     Response, Report, Alert, Config, AuditLog,
 ]

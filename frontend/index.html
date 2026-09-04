@@ -772,18 +772,112 @@
             color: var(--muted);
         }
 
+        .feed {
+            max-height: 300px;
+        }
+
         .feed .ev.fresh {
-            animation: flash .8s;
+            animation: flash 1.6s ease-out;
+            box-shadow: inset 2px 0 0 var(--accent);
         }
 
         @keyframes flash {
-            from {
-                background: rgba(41, 224, 255, .16);
+            0% {
+                background: rgba(41, 224, 255, .22);
             }
 
-            to {
+            100% {
                 background: transparent;
             }
+        }
+
+        /* Live Feed panel header: title + "new" counter + View all */
+        .feedhead {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 11px;
+        }
+
+        .feedhead h3 {
+            margin: 0;
+            border-left: 2px solid var(--accent);
+        }
+
+        .feedhead .grow {
+            flex: 1;
+        }
+
+        .newpill {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 700;
+            color: #04121a;
+            background: var(--accent);
+            border-radius: 10px;
+            padding: 1px 7px;
+            opacity: 0;
+            transition: opacity .25s;
+        }
+
+        .newpill.show {
+            opacity: 1;
+            animation: newpulse 1.2s ease-out 2;
+        }
+
+        @keyframes newpulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 rgba(41, 224, 255, .5);
+            }
+
+            50% {
+                box-shadow: 0 0 0 5px rgba(41, 224, 255, 0);
+            }
+        }
+
+        .viewall {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--muted);
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 2px 4px;
+        }
+
+        .viewall:hover {
+            color: var(--accent);
+        }
+
+        /* SIEM-style scrolling log viewer for the Events tab */
+        .logview {
+            max-height: 62vh;
+            overflow: auto;
+        }
+
+        .logview table {
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        .logview tbody tr:nth-child(even) td {
+            background: rgba(112, 150, 191, .045);
+        }
+
+        .logview tbody tr:hover td {
+            background: rgba(41, 224, 255, .07);
+        }
+
+        .logfoot {
+            padding: 8px 14px;
+            color: var(--faint);
+            font-size: 11px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 10px;
+            align-items: center;
         }
 
         .listrow {
@@ -890,6 +984,8 @@
         <div class="status"><span class="dot" id="liveDot"></span><span id="liveTxt">idle</span></div>
         <div class="status"><span class="dot" id="wsDot"></span><span>stream</span></div>
         <a href="/docs" target="_blank" style="font-size:12px">API</a>
+        <span id="whoami" class="mono" style="font-size:11px;color:var(--muted)" hidden></span>
+        <a href="#" id="logout" style="font-size:12px" hidden onclick="signOut();return false">sign out</a>
     </div>
 
     <div class="bar">
@@ -925,7 +1021,12 @@
 
         <div class="rail">
             <div class="panel box">
-                <h3>Live Feed</h3>
+                <div class="feedhead">
+                    <h3>Live Feed</h3>
+                    <span class="newpill" id="feedNew">+0 new</span>
+                    <span class="grow"></span>
+                    <button class="viewall" onclick="openFeedModal()">View all ›</button>
+                </div>
                 <div class="feed" id="feed">
                     <div class="empty">—</div>
                 </div>
@@ -1064,25 +1165,103 @@
         const rc = n => n >= 80 ? "var(--crit)" : n >= 60 ? "var(--high)" : n >= 35 ? "var(--med)" : "var(--low)";
         const sevColor = { Critical: "var(--crit)", High: "var(--high)", Medium: "var(--med)", Low: "var(--low)" };
 
-        async function api(path, opts) {
-            const r = await fetch(API + path, opts);
-            if (!r.ok) { let d = r.statusText; try { d = (await r.json()).detail || d; } catch (e) { } throw new Error(d); }
-            return r.json();
+        /* ---- auth: bearer token kept in localStorage, refreshed on demand ---- */
+        const auth = {
+            access: () => localStorage.getItem("act_access") || "",
+            refresh: () => localStorage.getItem("act_refresh") || "",
+            expires: () => Number(localStorage.getItem("act_expires") || 0),
+            clear: () => ["act_access", "act_refresh", "act_expires", "act_role", "act_user"]
+                .forEach(k => localStorage.removeItem(k)),
+        };
+
+        function toLogin() {
+            auth.clear();
+            location.replace("/login?next=" + encodeURIComponent(location.pathname));
         }
 
-        /* incident reports (per attacker) */
-        const reportUrl = (actor, fmt) => API + "/api/report/" + encodeURIComponent(actor) + "?format=" + fmt;
-        function openReport(actor) {
-            if (!actor) return flash("no attacker to report on");
-            window.open(reportUrl(actor, "html"), "_blank");
+        function signOut() {
+            const rt = auth.refresh();
+            if (rt) navigator.sendBeacon
+                ? fetch(API + "/api/auth/logout", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ refresh_token: rt }), keepalive: true,
+                }).catch(() => { })
+                : null;
+            toLogin();
         }
-        function downloadReport(actor) {
+
+        let _refreshing = null;
+        async function ensureFreshToken() {
+            if (!auth.access()) return;
+            if (auth.expires() - Date.now() > 60_000) return;   // still good
+            if (!auth.refresh()) return;
+            if (!_refreshing) {
+                _refreshing = fetch(API + "/api/auth/refresh", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ refresh_token: auth.refresh() }),
+                }).then(async r => {
+                    if (!r.ok) throw new Error("refresh failed");
+                    const d = await r.json();
+                    localStorage.setItem("act_access", d.access_token);
+                    localStorage.setItem("act_refresh", d.refresh_token);
+                    localStorage.setItem("act_expires", String(Date.now() + (d.expires_in || 1800) * 1000));
+                    if (d.role) localStorage.setItem("act_role", d.role);
+                }).catch(() => toLogin()).finally(() => { _refreshing = null; });
+            }
+            await _refreshing;
+        }
+
+        async function api(path, opts) {
+            opts = opts || {};
+            await ensureFreshToken();
+            const tok = auth.access();
+            if (tok) opts.headers = Object.assign({}, opts.headers, { Authorization: "Bearer " + tok });
+            const r = await fetch(API + path, opts);
+            if (r.status === 401) { toLogin(); throw new Error("session expired"); }
+            if (!r.ok) { let d = r.statusText; try { d = (await r.json()).detail || d; } catch (e) { } throw new Error(d); }
+            return r.status === 204 ? null : r.json();
+        }
+
+        async function initAuth() {
+            try {
+                const me = await api("/api/auth/me");
+                const w = document.getElementById("whoami"), lo = document.getElementById("logout");
+                const prototype = me.username === "prototype";   // ACT_AUTH_ENABLED=false
+                if (w) { w.textContent = me.username + " · " + me.role; w.hidden = false; }
+                if (lo) lo.hidden = prototype;
+            } catch (e) { /* api() already redirected on 401 */ }
+        }
+        initAuth();
+
+        /* incident reports (per attacker) — fetched with the bearer token, then
+           handed to the browser as a blob so no token rides in a URL */
+        const reportUrl = (actor, fmt) => API + "/api/report/" + encodeURIComponent(actor) + "?format=" + fmt;
+        async function fetchReportBlob(actor, fmt) {
+            await ensureFreshToken();
+            const tok = auth.access();
+            const r = await fetch(reportUrl(actor, fmt), tok ? { headers: { Authorization: "Bearer " + tok } } : undefined);
+            if (r.status === 401) { toLogin(); throw new Error("session expired"); }
+            if (!r.ok) throw new Error("report failed (" + r.status + ")");
+            return r.blob();
+        }
+        async function openReport(actor) {
             if (!actor) return flash("no attacker to report on");
-            const a = document.createElement("a");
-            a.href = reportUrl(actor, "pdf");
-            a.download = "";
-            document.body.appendChild(a); a.click(); a.remove();
+            try {
+                const url = URL.createObjectURL(await fetchReportBlob(actor, "html"));
+                window.open(url, "_blank");
+                setTimeout(() => URL.revokeObjectURL(url), 60000);
+            } catch (e) { flash(e.message); }
+        }
+        async function downloadReport(actor) {
+            if (!actor) return flash("no attacker to report on");
             flash("building PDF for " + actor + "…");
+            try {
+                const url = URL.createObjectURL(await fetchReportBlob(actor, "pdf"));
+                const a = document.createElement("a");
+                a.href = url; a.download = "act-report-" + actor + ".pdf";
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 60000);
+            } catch (e) { flash(e.message); }
         }
         // buttons carry the actor in a data-attribute (esc() is sufficient for a
         // quoted HTML attribute); a single delegated listener does the work, so
@@ -1145,7 +1324,9 @@
             flash("clearing…");
             try {
                 await api("/api/reset", { method: "POST" });
-                RESP_SEEN = {}; _feedTopId = null;
+                RESP_SEEN = {}; _feedTopId = null; _feedEvents = [];
+                closeFeedModal();
+                document.getElementById("feedNew").classList.remove("show");
                 document.getElementById("feed").innerHTML = '<div class="empty">—</div>';
                 document.getElementById("twin").innerHTML = "";
                 flash("cleared");
@@ -1202,26 +1383,77 @@
             if (!document.getElementById("events").hidden) loadEvents();
         }
 
-        /* Live Feed: the most recent events, newest first. Rendered on every
-           refresh (and on every websocket push) so it always reflects reality,
-           whether events arrived live or from a replay / one-shot pull. */
-        let _feedTopId = null;
+        /* Live Feed: the last 10 events, newest first. Rendered on every refresh
+           (and every websocket push) so it always reflects reality, whether
+           events arrived live or from a replay / one-shot pull. New rows flash
+           in and a "+N new" pill appears briefly. "View all" opens the modal. */
+        const FEED_ROWS = 10;
+        let _feedTopId = null, _feedEvents = [], _feedNewTimer = null;
+
+        const feedRow = (e, fresh) =>
+            `<div class="ev${fresh ? " fresh" : ""}">` +
+            `<span class="t mono">${esc(hhmmss(e.timestamp))}</span> ` +
+            `<span class="tag-type">${esc(e.event_type)}</span> ` +
+            `<span class="d">${esc(e.description)}</span></div>`;
+
         async function loadFeed() {
             const feed = document.getElementById("feed");
             let d;
-            try { d = await api("/api/events?limit=40"); } catch (e) { return; }
+            try { d = await api("/api/events?limit=300"); } catch (e) { return; }
+            _feedEvents = d.events;
             if (!d.events.length) { feed.innerHTML = '<div class="empty">—</div>'; _feedTopId = null; return; }
 
-            // how many rows at the top are new since the last render
+            // how many events at the top are new since the last render
             const seen = d.events.findIndex(e => e.id === _feedTopId);
             const freshCount = _feedTopId == null ? 0 : (seen < 0 ? d.events.length : seen);
             _feedTopId = d.events[0].id;
 
-            feed.innerHTML = d.events.map((e, i) =>
-                `<div class="ev${i < freshCount ? " fresh" : ""}">` +
-                `<span class="t mono">${esc(hhmmss(e.timestamp))}</span> ` +
-                `<span class="tag-type">${esc(e.event_type)}</span> ` +
-                `<span class="d">${esc(e.description)}</span></div>`).join("");
+            feed.innerHTML = d.events.slice(0, FEED_ROWS)
+                .map((e, i) => feedRow(e, i < freshCount)).join("");
+
+            const pill = document.getElementById("feedNew");
+            if (freshCount > 0) {
+                pill.textContent = "+" + freshCount + " new";
+                pill.classList.add("show");
+                clearTimeout(_feedNewTimer);
+                _feedNewTimer = setTimeout(() => pill.classList.remove("show"), 3200);
+            }
+            // reflect the new count in the open modal too
+            const mBody = document.getElementById("feed-modal-body");
+            if (mBody) mBody.innerHTML = _feedEvents.map((e, i) => feedRow(e, i < freshCount)).join("");
+        }
+
+        function closeFeedModal() {
+            const m = document.getElementById("feed-modal");
+            if (m) m.remove();
+            document.removeEventListener("keydown", _feedEsc);
+        }
+        function _feedEsc(e) { if (e.key === "Escape") closeFeedModal(); }
+
+        function openFeedModal() {
+            closeFeedModal();
+            const back = document.createElement("div");
+            back.id = "feed-modal";
+            back.style.cssText = "position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;" +
+                "padding:24px;background:rgba(6,8,12,.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)";
+            back.addEventListener("click", ev => { if (ev.target === back) closeFeedModal(); });
+
+            const boxEl = document.createElement("div");
+            boxEl.className = "panel";
+            boxEl.style.cssText = "max-width:760px;width:100%;max-height:82vh;display:flex;flex-direction:column;padding:16px 18px";
+            boxEl.innerHTML =
+                `<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+                   <div style="font-family:var(--font-display);font-weight:700;color:var(--accent)">Live Feed — recent events</div>
+                   <span class="grow" style="flex:1"></span>
+                   <span class="mono" style="font-size:11px;color:var(--faint)">${_feedEvents.length} shown</span>
+                   <button class="ghost" style="padding:2px 9px;font-size:14px;line-height:1" onclick="closeFeedModal()" title="close (Esc)">✕</button>
+                 </div>
+                 <div class="feed" id="feed-modal-body" style="max-height:none;flex:1;overflow-y:auto">
+                   ${_feedEvents.map(e => feedRow(e, false)).join("") || '<div class="empty">—</div>'}
+                 </div>`;
+            back.appendChild(boxEl);
+            document.body.appendChild(back);
+            document.addEventListener("keydown", _feedEsc);
         }
 
         let ARMED = false;       // a live SSH responder is attached to a VM
@@ -1472,17 +1704,19 @@
         }
 
         async function loadEvents() {
-            const d = await api("/api/events?limit=250");
+            const d = await api("/api/events?limit=500");
             const box = document.getElementById("events");
             if (!d.total) { box.innerHTML = '<div class="panel empty">No events</div>'; return; }
             box.innerHTML = `<div class="panel" style="overflow:hidden">
+        <div class="logview">
         <table><thead><tr><th>Time</th><th>Type</th><th>User</th><th>Source</th><th>Description</th></tr></thead><tbody>${d.events.map(e => `<tr>
-            <td class="mono" style="color:var(--muted)">${esc(e.timestamp)}</td>
+            <td class="mono" style="color:var(--muted);white-space:nowrap">${esc(e.timestamp)}</td>
             <td><span class="tag-type">${esc(e.event_type)}</span></td>
             <td class="mono">${esc(e.user || "")}</td>
             <td class="mono">${esc(e.ip_address || "")}</td>
             <td style="color:var(--muted)">${esc(e.description)}</td></tr>`).join("")}</tbody></table>
-        <div style="padding:8px 14px;color:var(--faint);font-size:11px">${d.count} of ${d.total}</div></div>`;
+        </div>
+        <div class="logfoot"><span>Showing ${d.count} of ${d.total} events</span></div></div>`;
         }
 
         /* coalesce a flood of websocket events into at most one refresh / 1.5s */
@@ -1498,7 +1732,8 @@
         /* live stream */
         function stream() {
             const base = API || location.origin;
-            let ws; try { ws = new WebSocket(base.replace(/^http/, "ws") + "/api/stream"); }
+            const qs = auth.access() ? "?token=" + encodeURIComponent(auth.access()) : "";
+            let ws; try { ws = new WebSocket(base.replace(/^http/, "ws") + "/api/stream" + qs); }
             catch (e) { return setTimeout(stream, 4000); }
             ws.onopen = () => document.getElementById("wsDot").classList.add("on");
             ws.onmessage = ev => {
@@ -1508,7 +1743,7 @@
             ws.onclose = () => { document.getElementById("wsDot").classList.remove("on"); setTimeout(stream, 4000); };
         }
 
-        /* critical-alert (Telegram / Slack) status + controls */
+        /* critical-alert (Telegram) status + controls */
         async function loadAlerts() {
             const box = document.getElementById("alerts");
             let s;
@@ -1516,29 +1751,24 @@
 
             const stateColor = s.enabled ? (s.configured ? "var(--low)" : "var(--high)") : "var(--faint)";
             const stateTxt = !s.enabled ? "disabled"
-                : s.configured ? "armed · " + s.active_transports.join(" + ")
-                : "on, but no transport configured";
+                : s.configured ? "armed"
+                : "on — add a Telegram bot token";
 
             box.innerHTML = `
               <div class="listrow"><span>Status</span>
                 <span class="pill" style="color:${stateColor}">${esc(stateTxt)}</span></div>
               <div class="listrow"><span>Fire at risk ≥</span><span class="mono">${s.risk_threshold}</span></div>
-              <div class="listrow"><span>Telegram</span><span class="mono" style="color:${s.telegram_ready ? 'var(--low)' : 'var(--faint)'}">${s.telegram_ready ? "ready" : "—"}</span></div>
-              <div class="listrow"><span>Slack</span><span class="mono" style="color:${s.slack_ready ? 'var(--low)' : 'var(--faint)'}">${s.slack_ready ? "ready" : "—"}</span></div>
+              <div class="listrow"><span>Telegram bot</span><span class="mono" style="color:${s.telegram_ready ? 'var(--low)' : 'var(--faint)'}">${s.telegram_ready ? "ready" : "not set"}</span></div>
               <div class="listrow"><span>Alerts sent</span><span class="mono">${s.alerts_sent}</span></div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px">
-                <select id="alertPlat" style="font-size:11px;padding:4px 6px">
-                  ${["telegram", "slack", "both"].map(p => `<option value="${p}"${s.platform === p ? " selected" : ""}>${p}</option>`).join("")}
-                </select>
                 <button class="ghost" style="font-size:11px;padding:4px 9px" onclick="setAlerts(${!s.enabled})">${s.enabled ? "Disable" : "Enable"}</button>
                 <button class="ghost" style="font-size:11px;padding:4px 9px" onclick="testAlerts()">Send test</button>
               </div>
               ${s.last_error ? `<div class="mono" style="font-size:10px;color:var(--high);margin-top:6px;word-break:break-all">${esc(s.last_error)}</div>` : ""}`;
         }
         async function setAlerts(enable) {
-            const plat = (document.getElementById("alertPlat") || {}).value || "both";
             try {
-                await api("/api/notifications/config?enabled=" + enable + "&platform=" + plat, { method: "POST" });
+                await api("/api/notifications/config?enabled=" + enable, { method: "POST" });
                 flash("alerts " + (enable ? "enabled" : "disabled"));
                 loadAlerts();
             } catch (e) { flash(e.message); }
@@ -1547,9 +1777,9 @@
             flash("sending test alert…");
             try {
                 const r = await api("/api/notifications/test", { method: "POST" });
-                const ok = (r.results || []).filter(x => x.ok).map(x => x.transport);
-                const bad = (r.results || []).filter(x => !x.ok).map(x => x.transport);
-                toast(ok.length ? "test sent via " + ok.join(", ") : "test failed" + (bad.length ? " (" + bad.join(", ") + ")" : ""), 3200);
+                const ok = (r.results || []).some(x => x.ok);
+                const err = ((r.results || []).find(x => !x.ok) || {}).error;
+                toast(ok ? "test alert sent via Telegram" : ("test failed" + (err ? " — " + err : "")), 3200);
                 loadAlerts();
             } catch (e) { toast(e.message, 3600); }
         }

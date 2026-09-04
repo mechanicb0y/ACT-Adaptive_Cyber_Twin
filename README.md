@@ -120,6 +120,7 @@ scripts/attacks/        end-to-end attack simulations
 ACT/
 ├── backend/            Python: pipeline, API, tests
 │   ├── app/            source (see Architecture)
+│   │   ├── auth/       login, JWT sessions, refresh-token rotation, RBAC, OAuth2
 │   │   ├── core/       service infrastructure: settings, structured logging
 │   │   └── db/         SQLAlchemy models + engine (optional durable store)
 │   ├── alembic/        database schema migrations
@@ -129,7 +130,7 @@ ACT/
 │   ├── requirements.txt
 │   ├── .env            local secrets (git-ignored) — see .env.example
 │   └── .env.example    every supported environment variable, documented
-├── frontend/index.html the dashboard
+├── frontend/index.html the dashboard  (+ login.html — the sign-in page)
 ├── scripts/attacks/    lateral-movement & other simulations
 ├── docs/               setup guides + the weekly design write-ups
 └── docker-compose.yml
@@ -256,6 +257,45 @@ python -m app.main --file tests/logs/auth_bruteforce.log --json
 ```bash
 docker compose up --build      # serves the API + dashboard on :8000
 ```
+
+---
+
+## Authentication
+
+ACT ships **auth on by default**. Every `/api` route needs a bearer token except
+`/api/auth/*` and `/api/health`; the dashboard redirects to a `/login` page
+styled to match it.
+
+- **Local accounts** — username + password (bcrypt), three roles:
+  `viewer` (read only) < `analyst` (ingest, live capture, notifications) <
+  `admin` (arm/disarm, execute responses, user management).
+- **Sessions** — a short-lived JWT access token (`ACT_ACCESS_TOKEN_TTL_MIN`,
+  default 30 min) plus a rotating refresh token tracked in the database. Reusing
+  a rotated refresh token revokes the whole chain. "Remember me" swaps the
+  refresh lifetime from `ACT_REFRESH_TOKEN_TTL_DAYS` (7) to
+  `ACT_REFRESH_TOKEN_REMEMBER_DAYS` (30).
+- **First run** — the first admin is created from `ACT_ADMIN_USERNAME` /
+  `ACT_ADMIN_PASSWORD`. If no password is set, one is generated and written to
+  the log once — change it after signing in.
+- **OAuth2 (Google / GitHub)** — optional, inert until a provider's client id
+  **and** secret are set (`ACT_OAUTH_GOOGLE_CLIENT_ID`, …). Restrict first-time
+  sign-ups with `ACT_OAUTH_ALLOWED_DOMAINS`.
+
+Set **`ACT_JWT_SECRET`** in production (`python -c "import secrets;
+print(secrets.token_urlsafe(48))"`); without it sessions do not survive a
+restart. To run the old single-user prototype with no login, set
+`ACT_AUTH_ENABLED=false`.
+
+```bash
+# get a token and call the API
+curl -sX POST localhost:8000/api/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"…"}' | jq -r .access_token
+curl localhost:8000/api/stats -H "Authorization: Bearer $TOKEN"
+```
+
+Manage users at `POST/GET/PATCH/DELETE /api/auth/users` (admin), rotate a
+session at `POST /api/auth/refresh`, end one at `POST /api/auth/logout`.
 
 ---
 
