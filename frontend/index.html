@@ -1049,6 +1049,12 @@
                     <div class="empty">—</div>
                 </div>
             </div>
+            <div class="panel box" id="auditPanel" hidden>
+                <h3>Audit Log <span class="mono" style="font-size:10px;color:var(--faint)">admin</span></h3>
+                <div id="audit">
+                    <div class="empty">—</div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1229,6 +1235,10 @@
                 const prototype = me.username === "prototype";   // ACT_AUTH_ENABLED=false
                 if (w) { w.textContent = me.username + " · " + me.role; w.hidden = false; }
                 if (lo) lo.hidden = prototype;
+                if (me.role === "admin") {
+                    document.getElementById("auditPanel").hidden = false;
+                    loadAudit();
+                }
             } catch (e) { /* api() already redirected on 401 */ }
         }
         initAuth();
@@ -1380,7 +1390,24 @@
                 : '<div class="empty">—</div>';
 
             loadBehaviors(); loadGraph(); loadTwin(); loadAlerts(); loadFeed();
+            if (!document.getElementById("audit").parentElement.hidden) loadAudit();
             if (!document.getElementById("events").hidden) loadEvents();
+        }
+
+        /* Audit Log — admin only; the panel is unhidden by initAuth() */
+        async function loadAudit() {
+            const box = document.getElementById("audit");
+            let d; try { d = await api("/api/v1/audit?limit=40"); }
+            catch (e) { box.innerHTML = '<div class="empty">—</div>'; return; }
+            if (!d.entries || !d.entries.length) { box.innerHTML = '<div class="empty">no activity</div>'; return; }
+            box.innerHTML = d.entries.map(e => `
+                <div class="listrow" title="${esc(JSON.stringify(e.detail || {}))}">
+                    <span class="mono" style="color:var(--faint)">${esc((e.at || "").slice(0, 19).replace("T", " "))}</span>
+                    <span class="mono">${esc(e.actor || "—")}</span>
+                    <span style="color:var(--accent)">${esc(e.action)}</span>
+                    <span style="color:var(--faint)">${esc(e.target || "")}</span>
+                    <span style="color:var(--faint)">${esc(e.source_ip || "")}</span>
+                </div>`).join("");
         }
 
         /* Live Feed: the last 10 events, newest first. Rendered on every refresh

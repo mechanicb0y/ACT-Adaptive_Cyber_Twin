@@ -92,6 +92,25 @@ class RefreshToken(Base):
     )
 
 
+class PasswordResetToken(Base):
+    """One-time password-reset code. Only the SHA-256 hash of the code is
+    stored; the plaintext goes out in the reset email and is never persisted."""
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    created_at: Mapped[_dt.datetime] = _ts(default=utcnow, nullable=False)
+    expires_at: Mapped[_dt.datetime] = _ts(nullable=False)
+    consumed_at: Mapped[Optional[_dt.datetime]] = _ts()
+    requested_ip: Mapped[Optional[str]] = mapped_column(String(64))
+
+    user: Mapped[User] = relationship()
+
+
 class OAuthHandoff(Base):
     """One-time code bridging an OAuth callback redirect and the SPA.
 
@@ -244,6 +263,6 @@ class AuditLog(Base):
 
 
 ALL_MODELS = [
-    User, RefreshToken, OAuthHandoff, Event, Behavior, AttackPath,
-    Response, Report, Alert, Config, AuditLog,
+    User, RefreshToken, OAuthHandoff, PasswordResetToken, Event, Behavior,
+    AttackPath, Response, Report, Alert, Config, AuditLog,
 ]

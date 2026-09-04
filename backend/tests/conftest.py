@@ -17,6 +17,12 @@ from app.analyzer.normalizer import EventNormalizer  # noqa: E402
 from app.ingestion.parsers.linux_parser import LinuxParser  # noqa: E402
 from app.storage.event_store import EventStore  # noqa: E402
 
+# Import at collection time so app.config.env.load_dotenv() runs NOW, once,
+# before any test's _hermetic_env deletes the vars it reads. Otherwise a
+# lazily-imported app.core.* module could re-run load_dotenv mid-test and undo
+# the deletions (this only bit single-file runs, but it is a real trap).
+from app.core.settings import reload_settings  # noqa: E402
+
 
 #Secrets and deployment pointers that backend/.env may hold. Since the core
 #modules now load .env on import (app.core.settings -> app.config.env), those
@@ -41,6 +47,17 @@ _NEUTRALISED_ENV = (
     "ACT_RATE_LIMIT_AUTH_PER_MIN",
     "ACT_METRICS_TOKEN",
     "ACT_CORS_ORIGINS",
+    "ACT_SMTP_HOST",
+    "ACT_SMTP_FROM",
+    "ACT_SMTP_USERNAME",
+    "ACT_SMTP_PASSWORD",
+    "ACT_EMAIL_ALERTS",
+    "ACT_ALERT_EMAIL_TO",
+    "ACT_OTEL_ENABLED",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "SENTRY_DSN",
+    "ACT_PUBLIC_BASE_URL",
+    "ACT_ALLOWED_HOSTS",
 )
 
 
@@ -64,7 +81,6 @@ def _hermetic_env(monkeypatch):
     # across tests in one run. Off by default; test_ratelimit.py opts back in.
     monkeypatch.setenv("ACT_RATE_LIMIT_ENABLED", "false")
 
-    from app.core.settings import reload_settings
     reload_settings()
 
     try:

@@ -14,7 +14,8 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_engine
 from app.api.engine import AnalysisEngine
@@ -24,13 +25,33 @@ from app.api.serializers import (
     events_to_list,
     response_to_dict,
 )
-from app.auth.dependencies import require_admin, require_analyst
+from app.auth.dependencies import CurrentUser, require_admin, require_analyst
 from app.core import metrics
 from app.db import persist
+from app.db.repository import record_audit
+from app.db.session import get_db
 
 log = logging.getLogger("app.api.v1")
 
 router = APIRouter()
+
+
+def _client_ip(request: Request) -> str | None:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
+def _audit(db: Session, request: Request, actor: CurrentUser, action: str,
+           **detail) -> None:
+    try:
+        record_audit(db, action=action, actor=actor.username,
+                     source_ip=_client_ip(request), detail=detail or {})
+        db.commit()
+    except Exception:  # noqa: BLE001  (auditing must never break the action)
+        log.warning("audit write failed for %s", action, exc_info=True)
+        db.rollback()
 
 
 # ------------------------------------------------------------------ events #
@@ -106,24 +127,33 @@ def get_intelligence(engine: AnalysisEngine = Depends(get_engine)):
 
 
 @router.post("/arm", tags=["intelligence"])
-def arm(account_lock: bool = False, _role=Depends(require_admin),
-        engine: AnalysisEngine = Depends(get_engine)):
+def arm(request: Request, account_lock: bool = False,
+        user: CurrentUser = Depends(require_admin),
+        engine: AnalysisEngine = Depends(get_engine),
+        db: Session = Depends(get_db)):
     """Point ACT's responder at the known SSH machine (normally automatic)."""
-    return engine.arm(allow_account_lock=account_lock)
+    result = engine.arm(allow_account_lock=account_lock)
+    _audit(db, request, user, "responder.arm", account_lock=account_lock)
+    return result
 
 
 @router.post("/disarm", tags=["intelligence"])
-def disarm(_role=Depends(require_admin),
-           engine: AnalysisEngine = Depends(get_engine)):
+def disarm(request: Request, user: CurrentUser = Depends(require_admin),
+           engine: AnalysisEngine = Depends(get_engine),
+           db: Session = Depends(get_db)):
     """Emergency stand-down: forget the SSH target so nothing executes."""
-    return engine.disarm()
+    result = engine.disarm()
+    _audit(db, request, user, "responder.disarm")
+    return result
 
 
 @router.post("/respond", tags=["intelligence"])
 def respond(
+    request: Request,
     actor: str = Query(..., description="the attacker's address"),
-    _role=Depends(require_admin),
+    user: CurrentUser = Depends(require_admin),
     engine: AnalysisEngine = Depends(get_engine),
+    db: Session = Depends(get_db),
 ):
     """Carry out the recommended action for one attacker (executes only if armed)."""
     result = engine.respond(actor)
@@ -134,6 +164,8 @@ def respond(
     if result.action in ("block", "iptables_block"):
         metrics.record_block(result.took_effect)
     persist.persist_response(result, attacker_ip=actor)
+    _audit(db, request, user, "responder.respond", target=actor,
+           action_taken=result.action, status=result.status, armed=result.armed)
     return response_to_dict(result)
 
 
@@ -228,15 +260,19 @@ def _ingest_result(stats) -> dict:
 
 @router.post("/ingest/file", tags=["ingest"])
 def ingest_file(
+    request: Request,
     path: str = Query(..., description="log file name or full path"),
-    _role=Depends(require_analyst),
+    user: CurrentUser = Depends(require_analyst),
     engine: AnalysisEngine = Depends(get_engine),
+    db: Session = Depends(get_db),
 ):
     try:
         stats = engine.ingest_file(path)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error))
     persist.persist_snapshot(engine)
+    _audit(db, request, user, "ingest.file", path=path,
+           events_created=stats.events_created)
     return _ingest_result(stats)
 
 
@@ -331,8 +367,10 @@ def stop_live(_role=Depends(require_analyst),
 
 
 @router.post("/reset", tags=["system"])
-def reset(_role=Depends(require_analyst),
-         engine: AnalysisEngine = Depends(get_engine)):
+def reset(request: Request, user: CurrentUser = Depends(require_analyst),
+          engine: AnalysisEngine = Depends(get_engine),
+          db: Session = Depends(get_db)):
     engine.reset()
     persist.clear_all()
+    _audit(db, request, user, "engine.reset")
     return {"status": "cleared"}

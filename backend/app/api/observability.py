@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from app.core.settings import get_settings
+from app.core.tracing import observability_status
 from app.db.session import check_connection
 
 log = logging.getLogger("app.api.observability")
@@ -68,4 +69,7 @@ def build_health(engine: Any) -> dict:
         "active_attack_paths": paths,
         "compromised": compromised,
         "last_attack_time": _last_attack(engine),
+        "observability": observability_status(),
+        "email": {"configured": settings.smtp_configured,
+                  "alerts_enabled": settings.email_alerts_enabled},
     }

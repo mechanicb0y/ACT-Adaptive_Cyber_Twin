@@ -7,10 +7,11 @@ compatibility, also at ``/api`` (hidden from the schema).
 
 from fastapi import APIRouter
 
-from app.api.v1 import routes, system
+from app.api.v1 import audit, routes, system
 
 api_router = APIRouter()
 api_router.include_router(system.router)
+api_router.include_router(audit.router)
 api_router.include_router(routes.router)
 
 __all__ = ["api_router"]

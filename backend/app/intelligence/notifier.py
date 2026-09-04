@@ -20,6 +20,17 @@ from typing import Any, Dict, List, Optional
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
 
+def _email_sender():
+    """Late import so the notifier stays usable if app.core is unavailable."""
+    try:
+        from app.core.email import EmailSender
+        from app.core.settings import get_settings
+        settings = get_settings()
+        return EmailSender.from_settings(settings), settings
+    except Exception:                                       # noqa: BLE001
+        return None, None
+
+
 class Notifier:
 
     def __init__(self, config=None):
@@ -45,6 +56,11 @@ class Notifier:
 
         self.timeout = int(os.environ.get("ACT_NOTIFY_TIMEOUT", section.get("timeout", 8)))
 
+        # optional email transport (SMTP), configured entirely via settings/.env
+        self._email, _settings = _email_sender()
+        self.email_alerts_enabled = bool(getattr(_settings, "email_alerts_enabled", False))
+        self.alert_email_to = getattr(_settings, "alert_email_to", None) or ""
+
         self._sent: set = set()
         self._lock = threading.Lock()
         self._last_error: Optional[str] = None
@@ -58,8 +74,17 @@ class Notifier:
         return bool(self.telegram_token and self.telegram_chat)
 
     @property
+    def email_ready(self) -> bool:
+        return bool(
+            self.email_alerts_enabled
+            and self.alert_email_to
+            and self._email is not None
+            and self._email.configured
+        )
+
+    @property
     def configured(self) -> bool:
-        return self.telegram_ready
+        return self.telegram_ready or self.email_ready
 
     def configure(
         self,
@@ -76,11 +101,18 @@ class Notifier:
         return self.status()
 
     def status(self) -> Dict[str, Any]:
+        transports = []
+        if self.telegram_ready:
+            transports.append("telegram")
+        if self.email_ready:
+            transports.append("email")
         return {
             "enabled": self.enabled,
             "platform": "telegram",
+            "transports": transports,
             "risk_threshold": self.risk_threshold,
             "telegram_ready": self.telegram_ready,
+            "email_ready": self.email_ready,
             "configured": self.configured,
             "alerts_sent": len(self._sent),
             "last_error": self._last_error,
@@ -103,23 +135,34 @@ class Notifier:
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             response.read()
 
-    def send_text(self, text: str) -> List[Dict[str, Any]]:
-        """Send `text` over Telegram. Returns a one-row result list (matching
-        the shape the dashboard expects). Never raises."""
+    def send_text(self, text: str, *, subject: str = "ACT alert") -> List[Dict[str, Any]]:
+        """Send `text` over every ready transport (Telegram, email). Returns one
+        result row per transport. Never raises."""
 
-        if not self.telegram_ready:
-            return []
+        results: List[Dict[str, Any]] = []
 
-        try:
-            self._post(
-                TELEGRAM_API.format(token=self.telegram_token),
-                {"chat_id": self.telegram_chat, "text": text, "parse_mode": "Markdown",
-                 "disable_web_page_preview": True},
-            )
-            return [{"transport": "telegram", "ok": True}]
-        except Exception as error:                          # noqa: BLE001
-            self._last_error = f"telegram: {error}"
-            return [{"transport": "telegram", "ok": False, "error": str(error)}]
+        if self.telegram_ready:
+            try:
+                self._post(
+                    TELEGRAM_API.format(token=self.telegram_token),
+                    {"chat_id": self.telegram_chat, "text": text,
+                     "parse_mode": "Markdown", "disable_web_page_preview": True},
+                )
+                results.append({"transport": "telegram", "ok": True})
+            except Exception as error:                      # noqa: BLE001
+                self._last_error = f"telegram: {error}"
+                results.append({"transport": "telegram", "ok": False,
+                                "error": str(error)})
+
+        if self.email_ready:
+            ok, error = self._email.send(self.alert_email_to, subject, text)
+            row = {"transport": "email", "ok": ok}
+            if not ok:
+                self._last_error = f"email: {error}"
+                row["error"] = error
+            results.append(row)
+
+        return results
 
     # ------------------------------------------------------------------ #
 

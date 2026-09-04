@@ -22,6 +22,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.api.cors import DynamicCORSMiddleware
+from app.api.hosts import TrustedHostMiddleware
 from app.api.https import ForceHTTPSMiddleware
 from app.api.deps import get_engine
 from app.api.serializers import events_to_list
@@ -33,6 +34,7 @@ from app.auth.router import router as auth_router
 from app.core.logging import configure_logging
 from app.core.metrics import MetricsMiddleware
 from app.core.settings import get_settings
+from app.core.tracing import configure_observability
 from app.db.session import get_sessionmaker, init_db
 
 log = logging.getLogger("app.api")
@@ -41,9 +43,10 @@ FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(app_: FastAPI):
     configure_logging()
     settings = get_settings()
+    configure_observability(app_, settings)
     try:
         init_db()  # create_all for SQLite; a no-op once Alembic has run on PG
     except Exception:  # noqa: BLE001  (a broken DB must not stop the read-only demo)
@@ -77,7 +80,8 @@ app.add_middleware(AuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(DynamicCORSMiddleware)
-app.add_middleware(ForceHTTPSMiddleware)   # outermost: redirect before anything else
+app.add_middleware(ForceHTTPSMiddleware)
+app.add_middleware(TrustedHostMiddleware)  # outermost: reject a forged Host first
 
 # Auth endpoints and the engine API, each mounted twice: the canonical
 # /api/v1/... and the unversioned /api/... alias kept for the dashboard and

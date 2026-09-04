@@ -184,6 +184,52 @@ class Settings:
         default_factory=lambda: _bool("ACT_PERSIST_ENABLED", True)
     )
 
+    # --- public URL (password-reset links, OAuth redirects) -------------
+    public_base_url: Optional[str] = field(
+        default_factory=lambda: _opt("ACT_PUBLIC_BASE_URL")
+    )
+    # Host header allowlist. "*" = accept any (dev default). In production set
+    # this to your real host(s) so the Host header cannot be forged - see
+    # password-reset link construction. Leading "." allows subdomains.
+    allowed_hosts: str = field(default_factory=lambda: _str("ACT_ALLOWED_HOSTS", "*"))
+
+    # --- OpenTelemetry (optional; needs the observability extras) -------
+    otel_enabled: bool = field(default_factory=lambda: _bool("ACT_OTEL_ENABLED", False))
+    otel_service_name: str = field(
+        default_factory=lambda: _str("ACT_OTEL_SERVICE_NAME", "act")
+    )
+    otel_exporter_endpoint: Optional[str] = field(
+        default_factory=lambda: _opt("OTEL_EXPORTER_OTLP_ENDPOINT")
+    )
+    otel_console_export: bool = field(
+        default_factory=lambda: _bool("ACT_OTEL_CONSOLE", False)
+    )
+
+    # --- Sentry (optional; needs sentry-sdk) ----------------------------
+    sentry_dsn: Optional[str] = field(default_factory=lambda: _opt("SENTRY_DSN"))
+    sentry_traces_sample_rate: float = field(
+        default_factory=lambda: float(_str("SENTRY_TRACES_SAMPLE_RATE", "0.0"))
+    )
+
+    # --- SMTP / email --------------------------------------------------
+    smtp_host: Optional[str] = field(default_factory=lambda: _opt("ACT_SMTP_HOST"))
+    smtp_port: int = field(default_factory=lambda: _int("ACT_SMTP_PORT", 587))
+    smtp_username: Optional[str] = field(default_factory=lambda: _opt("ACT_SMTP_USERNAME"))
+    smtp_password: Optional[str] = field(default_factory=lambda: _opt("ACT_SMTP_PASSWORD"))
+    smtp_from: Optional[str] = field(default_factory=lambda: _opt("ACT_SMTP_FROM"))
+    smtp_starttls: bool = field(default_factory=lambda: _bool("ACT_SMTP_STARTTLS", True))
+    smtp_ssl: bool = field(default_factory=lambda: _bool("ACT_SMTP_SSL", False))
+    smtp_timeout: int = field(default_factory=lambda: _int("ACT_SMTP_TIMEOUT", 10))
+    email_alerts_enabled: bool = field(
+        default_factory=lambda: _bool("ACT_EMAIL_ALERTS", False)
+    )
+    alert_email_to: Optional[str] = field(
+        default_factory=lambda: _opt("ACT_ALERT_EMAIL_TO")
+    )
+    password_reset_ttl_minutes: int = field(
+        default_factory=lambda: _int("ACT_PASSWORD_RESET_TTL_MIN", 30)
+    )
+
     @property
     def is_production(self) -> bool:
         return self.env.lower() in {"production", "prod"}
@@ -219,6 +265,14 @@ class Settings:
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def smtp_configured(self) -> bool:
+        return bool(self.smtp_host and self.smtp_from)
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        return [h.strip() for h in self.allowed_hosts.split(",") if h.strip()]
 
     def redacted(self) -> dict:
         """Every field as a dict, with the database password masked."""

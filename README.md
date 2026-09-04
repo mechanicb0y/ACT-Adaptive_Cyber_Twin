@@ -136,7 +136,8 @@ ACT/
 ├── frontend/           index.html + login.html + Dockerfile + nginx.conf
 ├── systemd/            act.service unit (+ act-https.conf drop-in)
 ├── windows/            Install-ActService.ps1 (NSSM / Scheduled Task), cert script
-├── scripts/            attack sims + gen-dev-cert.sh + letsencrypt.sh
+├── scripts/            attack sims + gen-dev-cert.sh + letsencrypt.sh + backup/restore
+├── monitoring/         Prometheus + Grafana stack (ACT Overview dashboard)
 ├── docs/DEPLOYMENT.md  Docker / systemd / Windows / SSL
 ├── docker-compose.yml  backend + frontend + postgres (+ pgadmin, ollama profiles)
 └── .env.docker.example compose configuration
@@ -387,6 +388,37 @@ printed.
   `act_alerts_sent_total{platform,result}`, `act_login_attempts_total{result}`,
   and live gauges `act_events`, `act_behaviors`, `act_active_attack_paths`,
   `act_attack_paths_compromised`.
+- **Grafana / Prometheus** — `monitoring/` has a ready stack
+  (`docker compose -f monitoring/docker-compose.monitoring.yml up -d`) that
+  provisions the **ACT Overview** dashboard. See
+  [`monitoring/README.md`](monitoring/README.md).
+- **Tracing / errors** (optional, `requirements-observability.txt`) —
+  `ACT_OTEL_ENABLED=true` + `OTEL_EXPORTER_OTLP_ENDPOINT` exports spans over
+  OTLP/HTTP; `SENTRY_DSN` turns on Sentry. Both are logged no-ops when unset or
+  the packages are absent.
+
+---
+
+## Audit log, email, backups
+
+- **Audit log** — every security-relevant action (sign-in ok/failed, user
+  create/update/delete, password reset, `arm`/`disarm`/`respond`, `reset`,
+  `ingest`) writes an `audit_log` row. Read it at `GET /api/v1/audit` (admin;
+  filter by `actor`, `action` (`prefix.*`), `since`/`until`, paginate). The
+  dashboard shows the last 40 entries in an admin-only panel.
+- **Email (SMTP)** — set `ACT_SMTP_HOST` + `ACT_SMTP_FROM` (stdlib `smtplib`, no
+  package). Powers the **password-reset** flow (`POST
+  /api/auth/password-reset/request` → emailed link → `…/confirm`; always 202, no
+  account enumeration; a used or expired link is rejected; a reset logs every
+  session out). The link base is taken **only** from `ACT_PUBLIC_BASE_URL`
+  (required in production) — never the request `Host` — and
+  `ACT_ALLOWED_HOSTS` rejects a forged `Host` header outright. With
+  `ACT_EMAIL_ALERTS=true` + `ACT_ALERT_EMAIL_TO`, critical alerts also go out by
+  email alongside Telegram.
+- **Backup / restore** — `scripts/backup.sh` (Postgres `pg_dump` custom-format
+  or SQLite `.backup`, gzipped, `RETENTION_DAYS` prune) and
+  `scripts/restore.sh` (guarded, keeps the pre-restore SQLite file). Both read
+  `DATABASE_URL`.
 
 ---
 

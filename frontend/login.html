@@ -206,7 +206,27 @@
         </div>
 
         <div class="msg" id="msg" role="status" aria-live="polite"></div>
-        <div class="hint" id="hint"></div>
+        <div class="hint" id="hint"><a href="#" id="forgot" style="color:var(--faint)">Forgot password?</a></div>
+    </form>
+
+    <!-- shown for ?reset=<token> and via "Forgot password?" -->
+    <form class="card" id="resetForm" hidden autocomplete="off">
+        <div class="brand">ACT</div>
+        <div class="sub" id="resetSub">adaptive cyber twin — reset password</div>
+
+        <div id="requestFields">
+            <label for="resetEmail">Account email</label>
+            <input id="resetEmail" type="text" autocomplete="email">
+        </div>
+
+        <div id="confirmFields" hidden>
+            <label for="newPassword">New password</label>
+            <input id="newPassword" type="password" autocomplete="new-password" minlength="8">
+        </div>
+
+        <button class="primary" id="resetSubmit" type="submit">Send reset link</button>
+        <div class="msg" id="resetMsg" role="status" aria-live="polite"></div>
+        <div class="hint"><a href="#" id="backToLogin" style="color:var(--faint)">Back to sign in</a></div>
     </form>
 
     <script>
@@ -293,6 +313,58 @@
                 msg("cannot reach the API — is the server running?", "err");
             } finally {
                 $("submit").disabled = false;
+            }
+        });
+
+        /* ---- password reset -------------------------------------------------- */
+        const resetToken = new URLSearchParams(location.search).get("reset");
+        const rmsg = (t, k) => { const m = $("resetMsg"); m.textContent = t || ""; m.className = "msg" + (k ? " " + k : ""); };
+
+        function showReset(confirmMode) {
+            $("form").hidden = true;
+            $("resetForm").hidden = false;
+            $("requestFields").hidden = confirmMode;
+            $("confirmFields").hidden = !confirmMode;
+            $("resetSub").textContent = confirmMode
+                ? "adaptive cyber twin — choose a new password"
+                : "adaptive cyber twin — reset password";
+            $("resetSubmit").textContent = confirmMode ? "Set new password" : "Send reset link";
+        }
+        function showLogin() {
+            $("resetForm").hidden = true;
+            $("form").hidden = false;
+            history.replaceState(null, "", "/login");
+        }
+        $("forgot").addEventListener("click", e => { e.preventDefault(); showReset(false); });
+        $("backToLogin").addEventListener("click", e => { e.preventDefault(); showLogin(); });
+        if (resetToken) showReset(true);
+
+        $("resetForm").addEventListener("submit", async e => {
+            e.preventDefault();
+            rmsg("");
+            $("resetSubmit").disabled = true;
+            try {
+                if (resetToken) {
+                    const r = await fetch(API + "/api/auth/password-reset/confirm", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token: resetToken, new_password: $("newPassword").value }),
+                    });
+                    const d = await r.json().catch(() => ({}));
+                    if (!r.ok) { rmsg(d.detail || "reset failed", "err"); return; }
+                    rmsg("password updated — you can sign in now", "ok");
+                    setTimeout(showLogin, 1500);
+                } else {
+                    const r = await fetch(API + "/api/auth/password-reset/request", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ email: $("resetEmail").value }),
+                    });
+                    const d = await r.json().catch(() => ({}));
+                    rmsg(d.detail || "if that email has an account, a link is on its way", "ok");
+                }
+            } catch (err) {
+                rmsg("cannot reach the API — is the server running?", "err");
+            } finally {
+                $("resetSubmit").disabled = false;
             }
         });
     </script>

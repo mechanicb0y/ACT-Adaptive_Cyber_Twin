@@ -61,5 +61,14 @@ class PasswordChange(BaseModel):
     new_password: str = Field(min_length=8, max_length=72)
 
 
+class PasswordResetRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(min_length=8)
+    new_password: str = Field(min_length=8, max_length=72)
+
+
 class MessageResponse(BaseModel):
     detail: str

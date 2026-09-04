@@ -27,6 +27,9 @@ PyJWT==2.13.0
 # Prometheus metrics at /api/metrics (app/core/metrics.py). Pure Python.
 prometheus-client==0.26.0
 
+# Optional: OpenTelemetry tracing + Sentry — see requirements-observability.txt.
+# Email (password reset, alerts) uses the standard library (smtplib), no package.
+
 # Testing
 pytest==8.3.4
 

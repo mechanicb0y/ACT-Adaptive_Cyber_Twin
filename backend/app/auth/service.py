@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 from app.auth import tokens
 from app.auth.passwords import hash_password, verify_password
 from app.core.settings import Settings, get_settings
-from app.db.models import OAuthHandoff, RefreshToken, Role, User
+from app.db.models import (
+    OAuthHandoff,
+    PasswordResetToken,
+    RefreshToken,
+    Role,
+    User,
+)
 
 log = logging.getLogger("app.auth.service")
 
@@ -302,6 +308,65 @@ def bootstrap_admin(
 
 
 # ---------------------------------------------------------------------- oauth #
+
+
+def create_password_reset(
+    session: Session,
+    email: str,
+    *,
+    requested_ip: Optional[str] = None,
+    settings: Optional[Settings] = None,
+) -> Optional[tuple[User, str]]:
+    """Issue a reset code for the account with this email. Returns ``(user,
+    raw_token)`` or ``None`` when there is no such active local account - the
+    caller must respond identically either way (no account enumeration)."""
+    settings = settings or get_settings()
+    user = session.scalar(select(User).where(func.lower(User.email) == email.lower()))
+    if user is None or not user.is_active or not user.hashed_password:
+        return None
+
+    # one live code at a time
+    for stale in session.scalars(
+        select(PasswordResetToken).where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.consumed_at.is_(None),
+        )
+    ).all():
+        stale.consumed_at = _now()
+
+    raw = tokens.generate_refresh_token()
+    session.add(PasswordResetToken(
+        user_id=user.id,
+        token_hash=tokens.hash_refresh_token(raw),
+        expires_at=_now() + _dt.timedelta(minutes=settings.password_reset_ttl_minutes),
+        requested_ip=requested_ip,
+    ))
+    return user, raw
+
+
+def redeem_password_reset(
+    session: Session, raw_token: str, new_password: str
+) -> User:
+    row = session.scalar(
+        select(PasswordResetToken).where(
+            PasswordResetToken.token_hash == tokens.hash_refresh_token(raw_token)
+        )
+    )
+    if row is None:
+        raise AuthError("invalid or unknown reset link", status=400)
+    if row.consumed_at is not None:
+        raise AuthError("this reset link has already been used", status=400)
+    if _aware(row.expires_at) <= _now():
+        raise AuthError("this reset link has expired", status=400)
+
+    user = get_user_by_id(session, row.user_id)
+    if user is None or not user.is_active:
+        raise AuthError("account is disabled", status=403)
+
+    row.consumed_at = _now()
+    user.hashed_password = hash_password(new_password)
+    revoke_all_for_user(session, user.id)   # log every session out
+    return user
 
 
 def create_oauth_handoff(

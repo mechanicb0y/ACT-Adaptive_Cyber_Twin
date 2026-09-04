@@ -20,6 +20,8 @@ from app.auth.schemas import (
     LoginRequest,
     MessageResponse,
     PasswordChange,
+    PasswordResetConfirm,
+    PasswordResetRequest,
     RefreshRequest,
     TokenResponse,
     UserCreate,
@@ -27,6 +29,7 @@ from app.auth.schemas import (
     UserUpdate,
 )
 from app.auth.service import AuthError
+from app.core.email import EmailSender
 from app.core.settings import get_settings
 from app.db.repository import record_audit
 from app.db.session import get_db
@@ -113,6 +116,77 @@ def me(user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_
     if row is None:
         raise HTTPException(status_code=404, detail="user not found")
     return UserOut.model_validate(row)
+
+
+@router.post("/password-reset/request", response_model=MessageResponse,
+             status_code=status.HTTP_202_ACCEPTED)
+def password_reset_request(
+    body: PasswordResetRequest, request: Request, db: Session = Depends(get_db)
+):
+    """Start a password reset. Always returns 202 with the same body, whether or
+    not the email matches an account (no enumeration)."""
+    settings = get_settings()
+    same_answer = MessageResponse(
+        detail="if that email has an account, a reset link is on its way"
+    )
+
+    issued = service.create_password_reset(
+        db, body.email, requested_ip=_client_ip(request), settings=settings,
+    )
+    if issued is None:
+        db.commit()
+        return same_answer
+
+    user, raw_token = issued
+
+    # The link base is NEVER taken from the request (a forged Host header would
+    # send the victim a link to the attacker's site). It comes only from
+    # ACT_PUBLIC_BASE_URL; without that we fall back to the configured bind
+    # address for local dev, and refuse outright in production.
+    if settings.public_base_url:
+        base = settings.public_base_url.rstrip("/")
+    elif settings.is_production:
+        log.error("password reset requested but ACT_PUBLIC_BASE_URL is not set; "
+                  "not sending a link")
+        record_audit(db, action="password.reset.request", actor=user.username,
+                     source_ip=_client_ip(request),
+                     detail={"emailed": False, "error": "no public base url"})
+        db.commit()
+        return same_answer
+    else:
+        base = f"http://{settings.host}:{settings.port}"
+
+    reset_url = f"{base}/login?reset={raw_token}"
+
+    sender = EmailSender.from_settings(settings)
+    ok, error = sender.send_password_reset(
+        user.email, username=user.username, reset_url=reset_url,
+        ttl_minutes=settings.password_reset_ttl_minutes,
+    )
+    record_audit(db, action="password.reset.request", actor=user.username,
+                 source_ip=_client_ip(request),
+                 detail={"emailed": ok, "error": error})
+    db.commit()
+
+    if not ok and not settings.is_production:
+        # dev convenience: no SMTP, so surface the (config-derived) link
+        log.warning("password reset link for %s: %s", user.username, reset_url)
+    return same_answer
+
+
+@router.post("/password-reset/confirm", response_model=MessageResponse)
+def password_reset_confirm(
+    body: PasswordResetConfirm, request: Request, db: Session = Depends(get_db)
+):
+    try:
+        user = service.redeem_password_reset(db, body.token, body.new_password)
+    except AuthError as exc:
+        db.commit()
+        raise _as_http(exc)
+    record_audit(db, action="password.reset.confirm", actor=user.username,
+                 source_ip=_client_ip(request))
+    db.commit()
+    return MessageResponse(detail="password updated; sign in with your new password")
 
 
 @router.post("/change-password", response_model=MessageResponse)
