@@ -318,6 +318,93 @@ def test_oauth_complete_without_cookie_is_400(client):
     assert client.post("/api/auth/oauth/complete").status_code == 400
 
 
+# ------------------------------------- OAuth account-linking safety (unit) #
+
+
+def test_oauth_verified_email_provisions_new_account(db_session):
+    from app.auth import service
+
+    user = service.upsert_oauth_user(
+        db_session, provider="google", subject="g-1",
+        email="new@example.com", email_verified=True, username_hint="new",
+    )
+    assert user.email == "new@example.com"
+    assert user.oauth_provider == "google" and user.hashed_password is None
+
+
+def test_oauth_unverified_email_is_never_used_for_matching(db_session):
+    from app.auth import service
+
+    # a real local account owns this address
+    victim = service.create_user(db_session, username="victim",
+                                 password="victimpassword1",
+                                 email="victim@example.com", role="admin")
+    db_session.flush()
+
+    linked = service.upsert_oauth_user(
+        db_session, provider="github", subject="gh-9",
+        email="victim@example.com", email_verified=False,
+        username_hint="victim",
+    )
+    # a brand new, distinct account with no email - not the admin
+    assert linked.id != victim.id
+    assert linked.email is None
+    assert linked.role == "viewer"
+    db_session.refresh(victim)
+    assert victim.oauth_provider is None
+
+
+def test_oauth_verified_email_collision_with_password_account_is_refused(db_session):
+    from app.auth import service
+    from app.auth.service import AuthError
+
+    service.create_user(db_session, username="realuser",
+                        password="realpassword1",
+                        email="real@example.com", role="analyst")
+    db_session.flush()
+
+    with pytest.raises(AuthError) as err:
+        service.upsert_oauth_user(
+            db_session, provider="google", subject="g-777",
+            email="real@example.com", email_verified=True,
+            username_hint="real",
+        )
+    assert err.value.status == 409
+
+
+def test_oauth_verified_email_links_to_dormant_passwordless_account(db_session):
+    from app.auth import service
+
+    dormant = service.create_user(db_session, username="pending",
+                                  password=None, email="pending@example.com",
+                                  role="analyst")
+    db_session.flush()
+
+    linked = service.upsert_oauth_user(
+        db_session, provider="github", subject="gh-42",
+        email="pending@example.com", email_verified=True,
+        username_hint="pending",
+    )
+    assert linked.id == dormant.id
+    assert linked.oauth_provider == "github"
+    assert linked.role == "analyst"  # unchanged
+
+
+def test_oauth_returning_user_matched_by_subject_not_email(db_session):
+    from app.auth import service
+
+    first = service.upsert_oauth_user(
+        db_session, provider="google", subject="stable-1",
+        email="a@example.com", email_verified=True, username_hint="a",
+    )
+    db_session.flush()
+    again = service.upsert_oauth_user(
+        db_session, provider="google", subject="stable-1",
+        email="a@example.com", email_verified=True, username_hint="a",
+    )
+    assert again.id == first.id
+
+
 # ----------------------------------------------------------- websocket auth #
 
 

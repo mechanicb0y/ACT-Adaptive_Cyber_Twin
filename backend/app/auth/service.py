@@ -362,23 +362,45 @@ def upsert_oauth_user(
     provider: str,
     subject: str,
     email: Optional[str],
+    email_verified: bool,
     username_hint: str,
     default_role: str = "viewer",
 ) -> User:
+    # Match strictly on the provider's stable subject id first.
     user = session.scalar(
         select(User).where(
             User.oauth_provider == provider, User.oauth_subject == subject
         )
     )
     if user:
-        if email and user.email != email:
+        if email and email_verified and user.email != email:
             user.email = email
         return user
 
-    # Link to an existing local account with the same email, if any.
+    # An unverified email must never be used to find or create an account -
+    # otherwise anyone who can put a victim's address on a throwaway OAuth
+    # account takes it over. Drop it and provision a fresh, email-less account.
+    if email and not email_verified:
+        email = None
+
     if email:
         existing = session.scalar(select(User).where(User.email == email))
         if existing:
+            if existing.hashed_password:
+                # A real credentialed account. Silent linking here is account
+                # takeover; require the owner to prove the password first.
+                raise AuthError(
+                    "an account with this email already exists - sign in with "
+                    "your password, then link this provider from your profile",
+                    status=409,
+                )
+            if existing.oauth_provider and existing.oauth_provider != provider:
+                raise AuthError(
+                    "this email is already linked to a different sign-in provider",
+                    status=409,
+                )
+            # Dormant, passwordless account (e.g. admin pre-provisioned it):
+            # safe to attach this verified identity.
             existing.oauth_provider = provider
             existing.oauth_subject = subject
             return existing

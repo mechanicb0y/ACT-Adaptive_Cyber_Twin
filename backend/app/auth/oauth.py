@@ -72,7 +72,8 @@ class OAuthError(Exception):
 class OAuthIdentity:
     provider: str
     subject: str
-    email: Optional[str]
+    email: Optional[str]          # only set when the provider says it is verified
+    email_verified: bool
     username_hint: str
 
 
@@ -188,21 +189,31 @@ async def exchange_code(
                              f"({info_resp.status_code})")
         info = info_resp.json()
 
-        email = None
+        # An email is only trustworthy for account matching if the provider
+        # asserts it is verified. Anything unverified is dropped here so it can
+        # never be used to link or provision an account downstream.
+        email: Optional[str] = None
+        email_verified = False
+
         if provider == "google":
             subject = str(info.get("sub") or "")
-            email = info.get("email")
             username_hint = (info.get("email") or "").split("@")[0] or "user"
-        else:  # github
+            raw_verified = info.get("email_verified")
+            verified = raw_verified is True or str(raw_verified).lower() == "true"
+            if verified and info.get("email"):
+                email = str(info["email"])
+                email_verified = True
+        else:  # github - never trust /user's email field; use /user/emails
             subject = str(info.get("id") or "")
-            email = info.get("email")
             username_hint = info.get("login") or "user"
-            if not email and spec.emails_url:
+            if spec.emails_url:
                 emails_resp = await client.get(spec.emails_url, headers=auth_header)
                 if emails_resp.status_code < 400:
                     for entry in emails_resp.json():
-                        if entry.get("primary") and entry.get("verified"):
-                            email = entry.get("email")
+                        if entry.get("primary") and entry.get("verified") \
+                                and entry.get("email"):
+                            email = str(entry["email"])
+                            email_verified = True
                             break
 
     if not subject:
@@ -212,6 +223,7 @@ async def exchange_code(
         provider=provider,
         subject=subject,
         email=email.lower() if email else None,
+        email_verified=email_verified,
         username_hint=username_hint,
     )
 

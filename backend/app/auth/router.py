@@ -269,11 +269,17 @@ async def oauth_callback(
         return RedirectResponse(f"/login?oauth_error={exc.message}",
                                 status_code=303)
 
-    user = service.upsert_oauth_user(
-        db, provider=provider, subject=identity.subject,
-        email=identity.email, username_hint=identity.username_hint,
-        default_role=settings.oauth_default_role,
-    )
+    try:
+        user = service.upsert_oauth_user(
+            db, provider=provider, subject=identity.subject,
+            email=identity.email, email_verified=identity.email_verified,
+            username_hint=identity.username_hint,
+            default_role=settings.oauth_default_role,
+        )
+    except AuthError as exc:
+        db.rollback()
+        return RedirectResponse(f"/login?oauth_error={exc.message}",
+                                status_code=303)
     if not user.is_active:
         return RedirectResponse("/login?oauth_error=account+disabled",
                                 status_code=303)
