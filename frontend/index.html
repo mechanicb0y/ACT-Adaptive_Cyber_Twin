@@ -942,6 +942,12 @@
                     <div class="empty">—</div>
                 </div>
             </div>
+            <div class="panel box">
+                <h3>Critical Alerts</h3>
+                <div id="alerts">
+                    <div class="empty">—</div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1064,6 +1070,32 @@
             return r.json();
         }
 
+        /* incident reports (per attacker) */
+        const reportUrl = (actor, fmt) => API + "/api/report/" + encodeURIComponent(actor) + "?format=" + fmt;
+        function openReport(actor) {
+            if (!actor) return flash("no attacker to report on");
+            window.open(reportUrl(actor, "html"), "_blank");
+        }
+        function downloadReport(actor) {
+            if (!actor) return flash("no attacker to report on");
+            const a = document.createElement("a");
+            a.href = reportUrl(actor, "pdf");
+            a.download = "";
+            document.body.appendChild(a); a.click(); a.remove();
+            flash("building PDF for " + actor + "…");
+        }
+        // buttons carry the actor in a data-attribute (esc() is sufficient for a
+        // quoted HTML attribute); a single delegated listener does the work, so
+        // no attacker-influenced value is ever interpolated into a JS string.
+        const reportBtns = actor => `
+            <button class="ghost rbtn" data-fmt="html" data-actor="${esc(actor)}" style="font-size:11px;padding:4px 10px">Export Report</button>
+            <button class="ghost rbtn" data-fmt="pdf" data-actor="${esc(actor)}" style="font-size:11px;padding:4px 10px">PDF</button>`;
+        document.addEventListener("click", ev => {
+            const btn = ev.target.closest(".rbtn");
+            if (!btn) return;
+            (btn.dataset.fmt === "pdf" ? downloadReport : openReport)(btn.dataset.actor);
+        });
+
         function target() {
             const raw = document.getElementById("ip").value.trim();
             if (!raw) return null;
@@ -1113,7 +1145,7 @@
             flash("clearing…");
             try {
                 await api("/api/reset", { method: "POST" });
-                RESP_SEEN = {};
+                RESP_SEEN = {}; _feedTopId = null;
                 document.getElementById("feed").innerHTML = '<div class="empty">—</div>';
                 document.getElementById("twin").innerHTML = "";
                 flash("cleared");
@@ -1166,8 +1198,30 @@
             <span style="color:var(--faint)">${esc(t.tactic)}</span></div>`).join("")
                 : '<div class="empty">—</div>';
 
-            loadBehaviors(); loadGraph(); loadTwin();
+            loadBehaviors(); loadGraph(); loadTwin(); loadAlerts(); loadFeed();
             if (!document.getElementById("events").hidden) loadEvents();
+        }
+
+        /* Live Feed: the most recent events, newest first. Rendered on every
+           refresh (and on every websocket push) so it always reflects reality,
+           whether events arrived live or from a replay / one-shot pull. */
+        let _feedTopId = null;
+        async function loadFeed() {
+            const feed = document.getElementById("feed");
+            let d;
+            try { d = await api("/api/events?limit=40"); } catch (e) { return; }
+            if (!d.events.length) { feed.innerHTML = '<div class="empty">—</div>'; _feedTopId = null; return; }
+
+            // how many rows at the top are new since the last render
+            const seen = d.events.findIndex(e => e.id === _feedTopId);
+            const freshCount = _feedTopId == null ? 0 : (seen < 0 ? d.events.length : seen);
+            _feedTopId = d.events[0].id;
+
+            feed.innerHTML = d.events.map((e, i) =>
+                `<div class="ev${i < freshCount ? " fresh" : ""}">` +
+                `<span class="t mono">${esc(hhmmss(e.timestamp))}</span> ` +
+                `<span class="tag-type">${esc(e.event_type)}</span> ` +
+                `<span class="d">${esc(e.description)}</span></div>`).join("");
         }
 
         let ARMED = false;       // a live SSH responder is attached to a VM
@@ -1200,9 +1254,12 @@
             ARMED = !!d.armed;
 
             if (!d.assessments.length) {
+                const msg = d.assessing
+                    ? "Analysing the attack — predicting, deciding and writing the assessment…"
+                    : "No attacker to assess yet.";
                 box.innerHTML = `<div class="panel" style="padding:0;overflow:hidden">
                   ${twinHeader(null, null)}
-                  <div style="padding:14px 16px;color:var(--faint);font-size:12px">No attacker to assess yet.</div>
+                  <div style="padding:14px 16px;color:var(--faint);font-size:12px">${esc(msg)}</div>
                 </div>`;
                 return;
             }
@@ -1267,13 +1324,22 @@
                 </div>
               </div>
               <div style="padding:12px 16px;border-top:1px solid var(--border);color:var(--muted);font-size:12.5px;line-height:1.6">${esc(a.narrative)}</div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--border)">
+                ${(() => {
+                    const aiDec = dec.ai_assessment;
+                    if (aiDec && aiDec.influence && aiDec.influence !== "advisory")
+                        return `<span class="mono" style="font-size:10.5px;color:var(--accent)">AI influence: ${esc(aiDec.influence)}${aiDec.blended_confidence != null ? " · confidence " + Math.round(aiDec.blended_confidence * 100) + "%" : ""}</span>`;
+                    return `<span class="mono" style="font-size:10.5px;color:var(--faint)">${aiDec ? "AI consulted · advisory" : "deterministic decision"}</span>`;
+                })()}
+                <span class="grow" style="flex:1"></span>
+                ${reportBtns(a.actor)}
+              </div>
             </div>`;
         }
 
         function twinHeader(p, a) {
             return `<div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)">
                 <span style="font-family:var(--font-display);text-transform:uppercase;letter-spacing:.6px;font-weight:700;color:var(--accent)">Cognitive Twin</span>
-                ${p ? `<span class="mono" style="color:var(--faint);font-size:11px">${esc(p.model)} · ${esc(a.narrator)}</span>` : ""}
                 <span class="grow" style="flex:1"></span>
                 <span class="mono" style="font-size:11px;color:${ARMED ? 'var(--crit)' : 'var(--faint)'}">${ARMED ? "● auto-response armed" : "○ no VM connected"}</span>
               </div>`;
@@ -1396,7 +1462,8 @@
                 <div><div class="who mono">${esc(p.actor || "unknown")}</div>
                     <div style="color:var(--faint);font-size:11.5px" class="mono">${esc(hhmmss(p.started_at))}–${esc(hhmmss(p.ended_at))}</div></div>
                 <div class="comp"><div class="p" style="color:${p.succeeded ? "var(--crit)" : "var(--med)"}">${pct(p.completeness)}</div>
-                    <div class="t">stage ${p.deepest_stage}/${p.total_stages} · ${p.succeeded ? "compromised" : "no compromise"}</div></div>
+                    <div class="t">stage ${p.deepest_stage}/${p.total_stages} · ${p.succeeded ? "compromised" : "no compromise"}</div>
+                    ${p.actor ? `<div style="margin-top:6px">${reportBtns(p.actor)}</div>` : ""}</div>
             </div>
             <div class="progress"><i style="width:${pct(p.completeness)}"></i></div>
             <div class="steps">${steps}</div>
@@ -1435,20 +1502,56 @@
             catch (e) { return setTimeout(stream, 4000); }
             ws.onopen = () => document.getElementById("wsDot").classList.add("on");
             ws.onmessage = ev => {
-                const m = JSON.parse(ev.data);
-                if (m.type !== "events") return;
-                const feed = document.getElementById("feed");
-                if (feed.querySelector(".empty")) feed.innerHTML = "";
-                m.events.slice().reverse().forEach(e => {
-                    const row = document.createElement("div");
-                    row.className = "ev fresh";
-                    row.innerHTML = `<span class="t mono">${esc(hhmmss(e.timestamp))}</span> <span class="tag-type">${esc(e.event_type)}</span> <span class="d">${esc(e.description)}</span>`;
-                    feed.prepend(row);
-                });
-                while (feed.children.length > 150) feed.removeChild(feed.lastChild);
-                refreshSoon();
+                let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+                if (m.type === "events") refreshSoon();   // loadFeed() re-renders from /api/events
             };
             ws.onclose = () => { document.getElementById("wsDot").classList.remove("on"); setTimeout(stream, 4000); };
+        }
+
+        /* critical-alert (Telegram / Slack) status + controls */
+        async function loadAlerts() {
+            const box = document.getElementById("alerts");
+            let s;
+            try { s = await api("/api/notifications"); } catch (e) { box.innerHTML = '<div class="empty">—</div>'; return; }
+
+            const stateColor = s.enabled ? (s.configured ? "var(--low)" : "var(--high)") : "var(--faint)";
+            const stateTxt = !s.enabled ? "disabled"
+                : s.configured ? "armed · " + s.active_transports.join(" + ")
+                : "on, but no transport configured";
+
+            box.innerHTML = `
+              <div class="listrow"><span>Status</span>
+                <span class="pill" style="color:${stateColor}">${esc(stateTxt)}</span></div>
+              <div class="listrow"><span>Fire at risk ≥</span><span class="mono">${s.risk_threshold}</span></div>
+              <div class="listrow"><span>Telegram</span><span class="mono" style="color:${s.telegram_ready ? 'var(--low)' : 'var(--faint)'}">${s.telegram_ready ? "ready" : "—"}</span></div>
+              <div class="listrow"><span>Slack</span><span class="mono" style="color:${s.slack_ready ? 'var(--low)' : 'var(--faint)'}">${s.slack_ready ? "ready" : "—"}</span></div>
+              <div class="listrow"><span>Alerts sent</span><span class="mono">${s.alerts_sent}</span></div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px">
+                <select id="alertPlat" style="font-size:11px;padding:4px 6px">
+                  ${["telegram", "slack", "both"].map(p => `<option value="${p}"${s.platform === p ? " selected" : ""}>${p}</option>`).join("")}
+                </select>
+                <button class="ghost" style="font-size:11px;padding:4px 9px" onclick="setAlerts(${!s.enabled})">${s.enabled ? "Disable" : "Enable"}</button>
+                <button class="ghost" style="font-size:11px;padding:4px 9px" onclick="testAlerts()">Send test</button>
+              </div>
+              ${s.last_error ? `<div class="mono" style="font-size:10px;color:var(--high);margin-top:6px;word-break:break-all">${esc(s.last_error)}</div>` : ""}`;
+        }
+        async function setAlerts(enable) {
+            const plat = (document.getElementById("alertPlat") || {}).value || "both";
+            try {
+                await api("/api/notifications/config?enabled=" + enable + "&platform=" + plat, { method: "POST" });
+                flash("alerts " + (enable ? "enabled" : "disabled"));
+                loadAlerts();
+            } catch (e) { flash(e.message); }
+        }
+        async function testAlerts() {
+            flash("sending test alert…");
+            try {
+                const r = await api("/api/notifications/test", { method: "POST" });
+                const ok = (r.results || []).filter(x => x.ok).map(x => x.transport);
+                const bad = (r.results || []).filter(x => !x.ok).map(x => x.transport);
+                toast(ok.length ? "test sent via " + ok.join(", ") : "test failed" + (bad.length ? " (" + bad.join(", ") + ")" : ""), 3200);
+                loadAlerts();
+            } catch (e) { toast(e.message, 3600); }
         }
 
         async function loadLogs() {

@@ -17,7 +17,7 @@ from typing import List, Optional
 
 from app.config import env as _env  # noqa: F401  (loads backend/.env on import)
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -146,8 +146,9 @@ def get_intelligence():
     any blocking decision is executed immediately. ``ssh_target`` is the machine
     ACT will act on.
     """
+    assessments = assessments_to_list(engine.assessments())   # triggers the refresh
     data = engine.response_mode()
-    data["assessments"] = assessments_to_list(engine.assessments())
+    data["assessments"] = assessments
     return data
 
 
@@ -173,6 +174,79 @@ def respond(actor: str = Query(..., description="the attacker's address")):
         raise HTTPException(status_code=404, detail="No attack path for that actor")
 
     return response_to_dict(result)
+
+
+# ----------------------------------------------------------------- reports #
+
+
+@app.get("/api/report/{actor}")
+def get_report(
+    actor: str,
+    format: str = Query("html", pattern="^(html|pdf)$"),
+):
+    """Analyst-ready incident report for one attacker.
+
+    ``format=html`` returns a standalone page for preview; ``format=pdf``
+    returns a downloadable PDF with the same content (MITRE ATT&CK techniques,
+    kill-chain stages, event timeline, risk score, confidence, AI contribution
+    and the action ACT took).
+    """
+
+    built = engine.report(actor, fmt=format)
+
+    if built is None:
+        raise HTTPException(status_code=404, detail="No attack path for that actor")
+
+    content, media_type, filename = built
+    disposition = "attachment" if format == "pdf" else "inline"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------- notifications #
+
+
+@app.get("/api/notifications")
+def notifications_status():
+    """Whether critical-attack alerts (Telegram / Slack) are enabled and ready."""
+    return engine.notifier.status()
+
+
+@app.post("/api/notifications/config")
+def notifications_config(
+    enabled: Optional[bool] = None,
+    platform: Optional[str] = Query(None, pattern="^(telegram|slack|both)$"),
+    risk_threshold: Optional[int] = Query(None, ge=0, le=100),
+):
+    """Enable / disable alerting and choose the platform, at runtime.
+
+    Tokens and the persistent defaults live in ``backend/.env`` and
+    ``backend/config/detection.json``.
+    """
+    return engine.notifier.configure(
+        enabled=enabled, platform=platform, risk_threshold=risk_threshold
+    )
+
+
+@app.post("/api/notifications/test")
+def notifications_test():
+    """Send a test alert on every configured transport, right now."""
+
+    if not engine.notifier.configured:
+        raise HTTPException(
+            status_code=400,
+            detail=("No transport configured. Set TELEGRAM_BOT_TOKEN + "
+                    "TELEGRAM_CHAT_ID or SLACK_WEBHOOK_URL in backend/.env."),
+        )
+
+    results = engine.notifier.send_text(
+        "✅ *ACT test alert* — notifications are wired up correctly."
+    )
+    return {"results": results}
 
 
 # ------------------------------------------------------------------- stats #

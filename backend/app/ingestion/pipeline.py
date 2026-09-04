@@ -57,6 +57,7 @@ class IngestionPipeline:
         event_store: EventStore,
         normalizer: Optional[EventNormalizer] = None,
         on_event: Optional[Callable[[SecurityEvent], None]] = None,
+        stats: Optional[IngestionStats] = None,
     ):
         self.reader = reader
         self.parser = parser
@@ -64,10 +65,16 @@ class IngestionPipeline:
         self.normalizer = normalizer or EventNormalizer()
         self.on_event = on_event
 
+        #a caller may pass its own stats object and watch it fill up while
+        #run() is still going. This is what lets the dashboard show a live
+        #"lines read / understood" figure during follow mode, when run() does
+        #not return for hours.
+        self.stats = stats or IngestionStats()
+
     def run(self) -> IngestionStats:
         """Consume the reader until it is exhausted (or forever, if following)."""
 
-        stats = IngestionStats()
+        stats = self.stats
 
         for line in self.reader.read():
 

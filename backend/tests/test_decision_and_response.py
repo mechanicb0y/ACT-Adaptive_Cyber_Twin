@@ -124,7 +124,9 @@ def test_every_action_command_is_reversible():
     assert "DROP" in build_command(Action.BLOCK_IP, "1.2.3.4")
     assert "-D INPUT -s 1.2.3.4" in build_undo_command(Action.BLOCK_IP, "1.2.3.4")
 
-    assert build_command(Action.LOCK_ACCOUNT, "eve") == "sudo passwd -l eve"
+    #the forward command uses non-interactive sudo so a missing NOPASSWD rule
+    #fails fast instead of hanging on a password prompt
+    assert build_command(Action.LOCK_ACCOUNT, "eve") == "sudo -n passwd -l eve"
     assert build_undo_command(Action.LOCK_ACCOUNT, "eve") == "sudo passwd -u eve"
 
 

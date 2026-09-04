@@ -52,11 +52,13 @@ RISK_SYSTEM_PROMPT = (
     "Judge how dangerous this is and whether the source IP should be blocked "
     "now. Reply with ONE line of strict JSON and nothing else:\n"
     '{"recommendation": "block" | "alert" | "monitor", "confidence": <number 0.0-1.0>, '
-    '"threat": "critical" | "high" | "medium" | "low", "reasoning": "<one short sentence>"}\n'
+    '"threat": "critical" | "high" | "medium" | "low", '
+    '"risk": <integer 0-100>, "reasoning": "<one short sentence>"}\n'
     'Recommend "block" only for a clear, active attack: a brute-force or user '
     'enumeration pattern, credential access, a successful compromise, or '
-    'persistence. Use "monitor" for weak or ambiguous signals. Base confidence '
-    "on how certain you are. Do not invent facts beyond those given."
+    'persistence. Use "monitor" for weak or ambiguous signals. "risk" is your '
+    "own 0-100 severity estimate for this incident. Base confidence on how "
+    "certain you are. Do not invent facts beyond those given."
 )
 
 
@@ -255,10 +257,18 @@ class LlmAnalyst:
         if threat not in ("critical", "high", "medium", "low"):
             threat = None
 
+        risk = None
+        try:
+            risk = int(round(float(data.get("risk"))))
+            risk = max(0, min(100, risk))
+        except (TypeError, ValueError):
+            risk = None
+
         return {
             "recommendation": rec,
             "confidence": round(conf, 3),
             "threat": threat,
+            "risk": risk,
             "reasoning": str(data.get("reasoning", ""))[:300],
         }
 
@@ -284,9 +294,14 @@ class LlmAnalyst:
 
     # ------------------------------------------------------------ explain #
 
-    def explain(self, prediction, decision) -> str:
+    def explain(self, prediction, decision, allow_model: bool = True) -> str:
 
         facts = self.facts(prediction, decision)
+
+        #caller asked for the cheap path (used for every attacker except the
+        #worst): a deterministic template, no model call, no retrieval
+        if not allow_model:
+            return self._template(facts, None)
 
         if not self.available:
             return self._template(facts, self._retrieve(facts))

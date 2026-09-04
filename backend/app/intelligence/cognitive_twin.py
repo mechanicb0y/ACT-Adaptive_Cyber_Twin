@@ -49,8 +49,15 @@ class CognitiveTwin:
         path: AttackPath,
         events: Optional[List[SecurityEvent]] = None,
         execute: bool = False,
+        narrate: bool = True,
     ) -> TwinAssessment:
-        """Full predict -> decide -> respond -> explain for one attacker."""
+        """Full predict -> decide -> respond -> explain for one attacker.
+
+        ``narrate=False`` skips the language-model narrative (and its retrieval)
+        and uses the built-in template instead. The dashboard only shows the
+        narrative for the worst attacker, so the others do not need to pay for
+        a model round trip on every refresh.
+        """
 
         actor_events = self._events_for(path.actor, events or [])
 
@@ -73,7 +80,7 @@ class CognitiveTwin:
             decision, armed=self.armed and execute
         )
 
-        narrative = self.analyst.explain(prediction, decision)
+        narrative = self.analyst.explain(prediction, decision, allow_model=narrate)
 
         return TwinAssessment(
             actor=path.actor,
@@ -92,8 +99,12 @@ class CognitiveTwin:
         graph: AttackGraph,
         events: Optional[List[SecurityEvent]] = None,
     ) -> List[TwinAssessment]:
-        #one assessment per attacker, worst first (graph.paths is already sorted)
-        return [self.assess_path(path, events) for path in graph.paths]
+        #one assessment per attacker, worst first (graph.paths is already
+        #sorted). Only the worst gets a model-written narrative.
+        return [
+            self.assess_path(path, events, narrate=(index == 0))
+            for index, path in enumerate(graph.paths)
+        ]
 
     def respond_to(
         self,

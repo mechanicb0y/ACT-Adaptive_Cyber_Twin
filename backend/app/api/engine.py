@@ -28,7 +28,9 @@ from app.ingestion.readers.ssh_journald_reader import SSHJournalReader
 from app.intelligence.cognitive_twin import CognitiveTwin
 from app.intelligence.decision_engine import DecisionEngine, DecisionPolicy
 from app.intelligence.llm_analyst import LlmAnalyst
+from app.intelligence.notifier import Notifier
 from app.intelligence.rag.retriever import Retriever
+from app.reporting import build_report, render_html, render_pdf
 from app.intelligence.response.commands import build_command
 from app.intelligence.response.ssh_responder import SSHResponder
 from app.models.attack_graph import AttackGraph
@@ -80,6 +82,10 @@ class AnalysisEngine:
         self._ssh_identity: Dict[str, Any] = {}   #host/user/etc of the last SSH source
         self._allow_account_lock = False
 
+        #out-of-band alerting (Telegram / Slack) for critical incidents. Off
+        #until enabled in config or from the dashboard; never blocks a request.
+        self.notifier = Notifier(self.config)
+
         #ACT is always autonomous: the moment a VM is connected over SSH it
         #carries out any blocking decision itself, with no prompt and no preview.
         #The only bar is the decision engine's own confidence gate.
@@ -100,8 +106,8 @@ class AnalysisEngine:
         self._block_inflight: set = set()
         self._block_last_try: Dict[str, float] = {}
         self._block_attempts: Dict[str, int] = {}
-        self._block_backoff = 15.0      #seconds between retries
-        self._block_max_attempts = 6    #give up (show FAILED) only after this many
+        self._block_backoff = 12.0      #seconds between retries
+        self._block_max_attempts = 3    #give up (show FAILED) only after this many
         self._block_worker = threading.Thread(
             target=self._block_loop, name="act-block-worker", daemon=True
         )
@@ -110,19 +116,32 @@ class AnalysisEngine:
         self.last_stats = IngestionStats()
         self.sources: List[str] = []
 
-        #cache, rebuilt only when the number of stored events changes
+        #the ingestion currently running (follow mode). run() does not return
+        #for hours in follow mode, so the engine reads this pipeline's live
+        #stats object to report progress instead of waiting for the merge.
+        self._active_pipeline: Optional[IngestionPipeline] = None
+
+        #cache, rebuilt when the number of stored events changes - but no more
+        #than once every _graph_min_interval, so a burst of live events cannot
+        #make every dashboard poll re-run detection over thousands of events.
         self._cached_at = -1
+        self._cached_built_at = 0.0
+        self._graph_min_interval = 1.5
         self._behaviors: List[Behavior] = []
         self._graph: Optional[AttackGraph] = None
         self._assessments: List[TwinAssessment] = []
         self._lock = threading.Lock()
 
-        #behaviors/graph are cheap and rebuild on every change; the AI layer
-        #(prediction + local model + narrative) is throttled so a fast burst of
-        #events cannot pin the model and stall every request behind it
+        #only one _refresh may run at a time; concurrent dashboard requests
+        #that arrive while it is working just read the current cache and return
+        self._refresh_lock = threading.Lock()
+
+        #the AI layer (local model calls) is the slow part. When a model is
+        #available it runs on a background thread so the dashboard never blocks
+        #behind it; with no model it is instant and runs inline.
         self._assessed_at = 0.0
         self._assessed_count = -1
-        self._assess_interval = 5.0
+        self._assessing = False
 
         #live monitoring
         self._live_thread: Optional[threading.Thread] = None
@@ -136,18 +155,45 @@ class AnalysisEngine:
 
     def _run(self, reader: BaseLogReader, label: str) -> IngestionStats:
 
+        stats = IngestionStats()
         pipeline = IngestionPipeline(
             reader=reader,
             parser=self.parser,
             event_store=self.store,
             normalizer=self.normalizer,
+            stats=stats,
         )
 
-        stats = pipeline.run()
+        #expose it while it runs so `stats()` can report live progress in
+        #follow mode (where pipeline.run() blocks until the follow ends)
+        self._active_pipeline = pipeline
+        try:
+            pipeline.run()
+        finally:
+            self._active_pipeline = None
 
         self._merge_stats(stats, label)
 
         return stats
+
+    def _ingestion_stats(self) -> IngestionStats:
+        """Completed ingestion totals, plus whatever a follow in progress has
+        read so far - so 'lines understood' is never stuck at 0% while events
+        are streaming in."""
+
+        base = self.last_stats
+        pipeline = self._active_pipeline
+
+        if pipeline is None:
+            return base
+
+        live = pipeline.stats
+        return IngestionStats(
+            lines_read=base.lines_read + live.lines_read,
+            events_created=base.events_created + live.events_created,
+            lines_unmatched=base.lines_unmatched + live.lines_unmatched,
+            parse_errors=base.parse_errors + live.parse_errors,
+        )
 
     def _merge_stats(self, stats: IngestionStats, label: str) -> None:
 
@@ -394,35 +440,85 @@ class AnalysisEngine:
     # ------------------------------------------------------------------ #
 
     def _refresh(self) -> None:
+        """Bring the cached analysis up to date, cheaply and without blocking.
+
+        Only one refresh runs at a time: a dashboard request that arrives while
+        another is working simply reads the current cache. Detection is rate
+        limited, and the AI layer runs on a background thread when a model is
+        available, so no dashboard request ever waits on the model.
+        """
+
+        if not self._refresh_lock.acquire(blocking=False):
+            return
+
+        try:
+            self._refresh_locked()
+        finally:
+            self._refresh_lock.release()
+
+    def _refresh_locked(self) -> None:
 
         count = len(self.store.events)
         now = time.monotonic()
 
-        if count != self._cached_at:
+        #behaviours + attack graph: rebuild on change. Rebuild immediately while
+        #there is still nothing to show (first events of an attack), and only
+        #rate-limit once paths already exist and events are streaming in.
+        stale = count != self._cached_at
+        cooled = (now - self._cached_built_at) >= self._graph_min_interval
+        nothing_yet = self._graph is None or not self._graph.paths
+
+        if stale and (cooled or nothing_yet):
+            behaviors = self.correlator.detect()
+            graph = self.correlator.build_attack_graph(behaviors)
             with self._lock:
-                self._behaviors = self.correlator.detect()
-                self._graph = self.correlator.build_attack_graph(self._behaviors)
+                self._behaviors = behaviors
+                self._graph = graph
                 self._cached_at = count
+                self._cached_built_at = now
 
         graph = self._graph or AttackGraph()
 
-        #rebuild the AI assessments on a change, but no more than once every few
-        #seconds, and always if we have attack paths but no assessment yet
-        due = (count != self._assessed_count) and (now - self._assessed_at) >= self._assess_interval
-        missing = bool(graph.paths) and not self._assessments
-
-        if due or missing:
-            with self._lock:
-                self._assessments = self.twin.assess(graph, self.store.all())
-            self._assessed_at = now
-            self._assessed_count = count
-        elif not graph.paths:
+        #AI assessments: keyed to the graph we actually built (self._cached_at),
+        #not the live event count, so they always describe a real graph.
+        if not graph.paths:
             self._assessments = []
+            self._assessed_count = self._cached_at
+        elif self._cached_at != self._assessed_count and not self._assessing:
+            if self.twin.analyst.available:
+                #slow path (model calls) -> off the request thread
+                self._assessing = True
+                threading.Thread(
+                    target=self._assess_async, args=(self._cached_at,),
+                    name="act-assess", daemon=True,
+                ).start()
+            else:
+                #instant without a model -> keep it inline so callers see it now
+                self._assess_now(self._cached_at)
 
         #autonomous: queue a block for every attacker the engine decided on.
         #The actual SSH call happens on the background worker, so this returns
         #straight away and the request that triggered _refresh never blocks.
         self._auto_execute()
+
+        #fire critical-incident alerts (Telegram / Slack) off the request path
+        self._notify_critical()
+
+    def _assess_now(self, count: int) -> None:
+        graph = self._graph or AttackGraph()
+        assessments = self.twin.assess(graph, self.store.all())
+        with self._lock:
+            self._assessments = assessments
+            self._assessed_count = count
+            self._assessed_at = time.monotonic()
+
+    def _assess_async(self, count: int) -> None:
+        try:
+            self._assess_now(count)
+        except Exception:                                   # noqa: BLE001
+            pass
+        finally:
+            self._assessing = False
 
     def _pending_response(self, decision: Decision, detail: str) -> ResponseResult:
         return ResponseResult(
@@ -491,6 +587,69 @@ class AnalysisEngine:
             assessment.response = pending
             self._block_inflight.add(actor)
             self._block_jobs.put((actor, decision))
+
+    def _notify_critical(self) -> None:
+        """Send a Telegram / Slack alert for any assessment at or above the
+        notifier's risk threshold. Deduped inside the notifier (one per
+        attacker). Each send runs on its own short-lived daemon thread so a
+        slow webhook can never stall the dashboard."""
+
+        if not self.notifier.enabled or not self.notifier.configured:
+            return
+
+        target = self._ssh_identity.get("host")
+
+        for assessment in list(self._assessments):
+            if not self.notifier.should_notify(assessment):
+                continue
+            threading.Thread(
+                target=self._safe_notify,
+                args=(assessment, target),
+                name="act-notify",
+                daemon=True,
+            ).start()
+
+    def _safe_notify(self, assessment, target) -> None:
+        try:
+            self.notifier.notify_critical(assessment, target=target)
+        except Exception:                                   # noqa: BLE001
+            pass
+
+    def report(self, actor: str, fmt: str = "html"):
+        """Build an analyst-ready incident report for one attacker.
+
+        Returns ``(content, media_type, filename)`` or ``None`` when there is
+        no attack path for that actor. ``content`` is ``str`` for HTML and
+        ``bytes`` for PDF.
+        """
+
+        self._refresh()
+
+        graph = self._graph or AttackGraph()
+        path = next((p for p in graph.paths if p.actor == actor), None)
+        if path is None:
+            return None
+
+        assessment = next(
+            (a for a in self._assessments if a.actor == actor), None
+        )
+        if assessment is None:
+            assessment = self.twin.assess_path(path, self.store.all())
+
+        data = build_report(
+            assessment,
+            path,
+            generated_at=datetime.now(),
+            monitored_host=self._ssh_identity.get("host"),
+            armed=self._armed,
+        )
+
+        slug = "".join(c if c.isalnum() or c in "-._" else "_" for c in (actor or "attacker"))
+
+        if fmt == "pdf":
+            return render_pdf(data), "application/pdf", f"ACT-report-{slug}.pdf"
+
+        return render_html(data), "text/html; charset=utf-8", f"ACT-report-{slug}.html"
 
     def _block_loop(self) -> None:
         """Drains block jobs one at a time, off the request path."""
@@ -637,11 +796,17 @@ class AnalysisEngine:
 
         target = self._ssh_identity.get("host")
 
+        graph = self._graph or AttackGraph()
+
         return {
             "armed": self._armed,
             "auto_execute_confidence": self._auto_threshold,
             "ssh_target": (self.twin.responder.target_host
                            if self._armed and target else target),
+            #the cheap analysis is ready but the AI layer is still running on
+            #its background thread: lets the dashboard say "assessing…" instead
+            #of "nothing here" for the few seconds the local model takes
+            "assessing": bool(self._assessing and graph.paths and not self._assessments),
         }
 
     def arm(self, allow_account_lock: bool = False) -> Dict[str, Any]:
@@ -818,6 +983,7 @@ class AnalysisEngine:
         events = self.store.all()
         behaviors = self.behaviors()
         graph = self.attack_graph()
+        ingestion = self._ingestion_stats()
 
         worst = graph.worst_path
 
@@ -831,11 +997,11 @@ class AnalysisEngine:
                 "last": timestamps and max(timestamps).isoformat(sep=" ", timespec="seconds") or None,
             },
             "ingestion": {
-                "lines_read": self.last_stats.lines_read,
-                "events_created": self.last_stats.events_created,
-                "lines_unmatched": self.last_stats.lines_unmatched,
-                "parse_errors": self.last_stats.parse_errors,
-                "coverage": self.last_stats.coverage,
+                "lines_read": ingestion.lines_read,
+                "events_created": ingestion.events_created,
+                "lines_unmatched": ingestion.lines_unmatched,
+                "parse_errors": ingestion.parse_errors,
+                "coverage": ingestion.coverage,
                 "sources": self.sources,
             },
             "behaviors": {
@@ -880,6 +1046,7 @@ class AnalysisEngine:
             "rag_documents": self.retriever.size if self.retriever else 0,
             "rag_embedder": self.retriever.embedder.name if self.retriever else "none",
             "assessments": len(assessments),
+            "notifications": self.notifier.status(),
             "top": None,
         }
 
@@ -914,12 +1081,16 @@ class AnalysisEngine:
 
         self.stop_live()
 
+        self.notifier.reset()
+
         self.store.events.clear()
         self.last_stats = IngestionStats()
         self.sources = []
         self._cached_at = -1
+        self._cached_built_at = 0.0
         self._assessed_at = 0.0
         self._assessed_count = -1
+        self._assessing = False
         self._behaviors = []
         self._graph = None
         self._assessments = []

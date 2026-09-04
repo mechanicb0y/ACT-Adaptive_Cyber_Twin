@@ -5,7 +5,7 @@
 #armed. This separation keeps "what to do" and "actually doing it" apart.
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class Action:
@@ -47,6 +47,13 @@ class Decision:
     #["lock account 'kali'", "isolate the host"]. Advisory only: ACT never
     #executes these, it only carries out `action`.
     also_consider: List[str] = field(default_factory=list)
+
+    #how the local AI model contributed to this decision, if it was consulted:
+    #{"recommendation", "confidence", "threat", "reasoning", "source",
+    # "statistical_confidence", "blended_confidence", "influence"}. None when no
+    #model was available. The AI never gets sole control (see decision_engine),
+    #but this records its vote so the dashboard and report can show it.
+    ai_assessment: Optional[Dict[str, Any]] = None
 
     @property
     def changes_the_machine(self) -> bool:

@@ -80,7 +80,9 @@ class DecisionEngine:
         #but never full control: a wrong model cannot invent a block on its own
         #(the pattern + seriousness checks still gate), and it cannot talk ACT
         #out of blocking a confirmed compromise.
+        statistical_confidence = confidence
         llm_rec = None
+        llm_conf = 0.0
         if isinstance(llm, dict) and llm.get("recommendation") in ("block", "alert", "monitor"):
             llm_rec = llm["recommendation"]
             try:
@@ -91,6 +93,33 @@ class DecisionEngine:
             if path.succeeded:
                 #a confirmed break-in stays firmly blockable no matter what
                 confidence = max(confidence, self.policy.block_confidence)
+
+        #a compact record of the AI's contribution, attached to every Decision
+        #below so the dashboard and the incident report can show how it voted
+        ai_meta: Optional[dict] = None
+        if llm_rec:
+            threat_level = llm.get("threat") if isinstance(llm, dict) else None
+            #the AI's view of the risk, on the same 0-100 scale, blended 70/30
+            #with the statistical score. Informational: the gates below still run
+            #on the deterministic `risk`, but the report shows both numbers.
+            model_risk = llm.get("risk") if isinstance(llm, dict) else None
+            if not isinstance(model_risk, (int, float)):
+                model_risk = {"critical": 95, "high": 80, "medium": 55, "low": 25}.get(threat_level)
+            ai_risk = (
+                round(0.7 * risk + 0.3 * float(model_risk)) if model_risk is not None else risk
+            )
+            ai_meta = {
+                "recommendation": llm_rec,
+                "confidence": round(llm_conf, 3),
+                "threat": threat_level,
+                "reasoning": llm.get("reasoning") if isinstance(llm, dict) else None,
+                "source": llm.get("source") if isinstance(llm, dict) else None,
+                "statistical_risk": risk,
+                "ai_adjusted_risk": ai_risk,
+                "statistical_confidence": statistical_confidence,
+                "blended_confidence": confidence,
+                "influence": "advisory",
+            }
 
         #the compromised account, if the attacker got in
         target_user = None
@@ -134,10 +163,18 @@ class DecisionEngine:
             llm_rec == "block" and confidence >= self.policy.block_confidence - 0.05
         )
 
+        #would ACT have cleared the confidence bar on its statistics alone?
+        stat_confident = statistical_confidence >= self.policy.block_confidence
+
         # ---- block the source: only for a serious, confident, real attack ----
         if dangerous and serious and confident:
 
             urgency = Severity.CRITICAL if (path.succeeded or severity == Severity.CRITICAL) else Severity.HIGH
+
+            if ai_meta and llm_rec == "block" and not stat_confident and not path.succeeded:
+                #the model's "block" vote is what carried this over the
+                #confidence bar; ACT's statistics alone would have only alerted
+                ai_meta["influence"] = "carried the decision over the block confidence threshold"
 
             rationale = (
                 f"Block {actor}: "
@@ -157,6 +194,7 @@ class DecisionEngine:
                 risk_score=risk,
                 factors=factors,
                 also_consider=also_consider,
+                ai_assessment=ai_meta,
             )
 
         # ---- a real attack, but not confident/serious enough to act on ----
@@ -178,6 +216,7 @@ class DecisionEngine:
                 risk_score=risk,
                 factors=factors or [f"risk {risk}"],
                 also_consider=also_consider,
+                ai_assessment=ai_meta,
             )
 
         # ---- not a recognised attack pattern: alert only if the score is high ----
@@ -193,6 +232,33 @@ class DecisionEngine:
                 ),
                 risk_score=risk,
                 factors=factors or [f"risk {risk}"],
+                ai_assessment=ai_meta,
+            )
+
+        # ---- statistics alone would only monitor, but the local AI model
+        #      independently judged this a real threat: raise it to a human
+        #      rather than staying silent. The AI cannot force a BLOCK here
+        #      (that path above still gates on a matched attack pattern), only
+        #      pull ACT's attention onto something the score under-weighted. ----
+        if llm_rec in ("block", "alert") and llm_conf >= 0.6:
+            if ai_meta:
+                ai_meta["influence"] = "escalated monitor -> alert"
+            threat_word = (llm.get("threat") if isinstance(llm, dict) else None) or "real"
+            return Decision(
+                action=Action.ALERT,
+                target=actor,
+                urgency=Severity.HIGH if threat_word in ("critical", "high") else Severity.MEDIUM,
+                confidence=confidence,
+                rationale=(
+                    f"Alert a human about {actor}: statistical scoring is low "
+                    f"(risk {risk}), but the local AI model assessed this as a "
+                    f"{threat_word} threat and recommended '{llm_rec}' at "
+                    f"{round(llm_conf * 100)}% confidence. A person should take a look."
+                ),
+                risk_score=risk,
+                factors=(factors or [f"risk {risk}"]) + [f"local AI recommended '{llm_rec}'"],
+                also_consider=also_consider,
+                ai_assessment=ai_meta,
             )
 
         # ---- nothing worth acting on ----
@@ -204,6 +270,7 @@ class DecisionEngine:
             rationale=f"Keep watching {actor}: activity is low risk for now.",
             risk_score=risk,
             factors=factors or ["low risk"],
+            ai_assessment=ai_meta,
         )
 
     def _confidence(self, risk: int, prediction: Optional[Prediction]) -> float:

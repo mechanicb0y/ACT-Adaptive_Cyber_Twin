@@ -130,6 +130,7 @@ def decision_to_dict(decision: Decision) -> Dict[str, Any]:
         "risk_score": decision.risk_score,
         "factors": decision.factors,
         "also_consider": decision.also_consider,
+        "ai_assessment": decision.ai_assessment,
         "changes_the_machine": decision.changes_the_machine,
         "needs_arming": decision.needs_arming,
     }

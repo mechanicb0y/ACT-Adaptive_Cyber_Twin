@@ -17,6 +17,10 @@ pytest==8.3.4
 # Config
 python-dotenv==1.2.2
 
+# Incident reports (HTML + PDF) and Telegram / Slack alerts need NOTHING extra:
+# the PDF writer is built in (standard PDF fonts) and both alert transports are
+# called over plain HTTPS with the standard library.
+
 # --- Optional (the Week 5 AI layer works without these, with fallbacks) ---
 # Real machine-learning anomaly score instead of the pure-Python one:
 scikit-learn==1.5.2

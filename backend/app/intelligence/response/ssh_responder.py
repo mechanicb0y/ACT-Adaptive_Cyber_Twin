@@ -21,9 +21,13 @@ from app.models.decision import Action, Decision
 from app.models.response import ResponseResult, ResponseStatus
 
 SSH_OPTIONS = [
+    "-n",                              # never read local stdin...
+    "-T",                              # ...and never ask for a pseudo-tty, so a
+                                       # remote `sudo` that wants a password
+                                       # fails at once instead of hanging
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "ConnectTimeout=10",
+    "-o", "ConnectTimeout=8",
     "-o", "ServerAliveInterval=5",     # give up on a hung session fast
     "-o", "ServerAliveCountMax=2",
 ]
@@ -41,7 +45,7 @@ class SSHResponder(BaseResponder):
         key_file: Optional[str] = None,
         ssh_path: str = "ssh",
         allowed_actions: Optional[Sequence[str]] = None,
-        timeout: int = 45,
+        timeout: int = 20,
     ):
         self.host = host
         self.user = user
@@ -82,6 +86,7 @@ class SSHResponder(BaseResponder):
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
+                stdin=subprocess.DEVNULL,   # nothing to type a password into
             )
         except subprocess.TimeoutExpired:
             #the SSH call ran long: the VM may just be slow. Worth another go.
