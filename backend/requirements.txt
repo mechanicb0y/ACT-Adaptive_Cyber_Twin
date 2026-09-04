@@ -9,6 +9,11 @@
 # Web API (app/api/main.py)
 fastapi==0.140.7
 uvicorn==0.51.0
+# Without this, uvicorn has no WebSocket protocol implementation and every
+# connection to /api/stream fails ("No supported WebSocket library detected"),
+# silently disabling the dashboard's real-time push - it falls back to
+# polling only. Required for live-mode updates to actually be live.
+websockets==15.0.1
 pydantic==2.13.4
 
 # Persistence (app/db/) — SQLite works out of the box with no config; set
@@ -50,3 +55,5 @@ numpy==2.1.1
 # https://ollama.com and `ollama pull llama3.2 nomic-embed-text`.
 # See docs/OLLAMA_RAG_SETUP.md. Cloud fallback via GEMINI_API_KEY or
 # ANTHROPIC_API_KEY also works. None of these are pip packages.
+
+httpx>=0.27.0

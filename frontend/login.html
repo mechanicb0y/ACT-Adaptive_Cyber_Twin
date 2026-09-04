@@ -186,7 +186,6 @@
 <body>
     <form class="card" id="form" autocomplete="on">
         <div class="brand">ACT</div>
-        <div class="sub">adaptive cyber twin — sign in</div>
 
         <label for="username">Username</label>
         <input id="username" name="username" type="text" autocomplete="username" autofocus required>
@@ -212,7 +211,7 @@
     <!-- shown for ?reset=<token> and via "Forgot password?" -->
     <form class="card" id="resetForm" hidden autocomplete="off">
         <div class="brand">ACT</div>
-        <div class="sub" id="resetSub">adaptive cyber twin — reset password</div>
+        <div class="sub" id="resetSub">reset password</div>
 
         <div id="requestFields">
             <label for="resetEmail">Account email</label>
@@ -326,8 +325,8 @@
             $("requestFields").hidden = confirmMode;
             $("confirmFields").hidden = !confirmMode;
             $("resetSub").textContent = confirmMode
-                ? "adaptive cyber twin — choose a new password"
-                : "adaptive cyber twin — reset password";
+                ? "choose a new password"
+                : "reset password";
             $("resetSubmit").textContent = confirmMode ? "Set new password" : "Send reset link";
         }
         function showLogin() {

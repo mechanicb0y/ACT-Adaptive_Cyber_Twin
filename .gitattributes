@@ -1,0 +1,4 @@
+# Shell scripts must always check out with LF line endings and no BOM, even on
+# Windows with core.autocrlf=true - a CRLF or BOM'd shebang breaks the
+# container entrypoint with "exec format error".
+*.sh text eol=lf

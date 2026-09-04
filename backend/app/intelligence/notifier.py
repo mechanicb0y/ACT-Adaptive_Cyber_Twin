@@ -14,6 +14,7 @@
 import json
 import os
 import threading
+import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
@@ -132,8 +133,26 @@ class Notifier:
         request = urllib.request.Request(
             url, data=data, headers={"content-type": "application/json"}
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            response.read()
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                response.read()
+        except urllib.error.HTTPError as error:
+            # Telegram puts the actual reason ("can't parse entities: ...",
+            # "chat not found", etc.) in the response body, not in the status
+            # line - str(error) alone is just "HTTP Error 400: Bad Request".
+            detail = ""
+            try:
+                body = json.loads(error.read().decode("utf-8"))
+                detail = body.get("description") or ""
+            except Exception:                               # noqa: BLE001
+                pass
+            raise RuntimeError(
+                f"HTTP {error.code}: {detail or error.reason}"
+            ) from error
+
+    #: Telegram's hard cap on message length (UTF-16 code units); stay well
+    #: under it so a long narrative can never itself cause a 400.
+    MAX_TEXT_LENGTH = 3900
 
     def send_text(self, text: str, *, subject: str = "ACT alert") -> List[Dict[str, Any]]:
         """Send `text` over every ready transport (Telegram, email). Returns one
@@ -143,10 +162,18 @@ class Notifier:
 
         if self.telegram_ready:
             try:
+                clipped = text if len(text) <= self.MAX_TEXT_LENGTH else (
+                    text[: self.MAX_TEXT_LENGTH - 3] + "..."
+                )
+                # Plain text, no parse_mode: alert text is built from live
+                # attacker data and LLM-written narrative, which routinely
+                # contains "_", "*", "`" or "[" - Telegram's Markdown parser
+                # treats those as formatting and 400s on any unescaped one.
+                # Plain text sidesteps that whole class of failure.
                 self._post(
                     TELEGRAM_API.format(token=self.telegram_token),
-                    {"chat_id": self.telegram_chat, "text": text,
-                     "parse_mode": "Markdown", "disable_web_page_preview": True},
+                    {"chat_id": self.telegram_chat, "text": clipped,
+                     "disable_web_page_preview": True},
                 )
                 results.append({"transport": "telegram", "ok": True})
             except Exception as error:                      # noqa: BLE001
@@ -169,13 +196,14 @@ class Notifier:
     @staticmethod
     def _format(actor: str, target: Optional[str], attack_type: str,
                 risk: int, summary: str) -> str:
+        # plain text (see send_text) - no markup characters to escape
         return (
-            f"🚨 *ACT critical alert*\n"
-            f"*Attacker:* `{actor}`\n"
-            f"*Target:* {target or 'monitored host'}\n"
-            f"*Attack type:* {attack_type}\n"
-            f"*Risk score:* {risk}/100\n"
-            f"*Summary:* {summary}"
+            f"🚨 ACT CRITICAL ALERT\n"
+            f"Attacker: {actor}\n"
+            f"Target: {target or 'monitored host'}\n"
+            f"Attack type: {attack_type}\n"
+            f"Risk score: {risk}/100\n"
+            f"Summary: {summary}"
         )
 
     def should_notify(self, assessment) -> bool:

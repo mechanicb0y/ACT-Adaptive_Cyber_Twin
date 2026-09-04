@@ -984,7 +984,7 @@
         <div class="status"><span class="dot" id="liveDot"></span><span id="liveTxt">idle</span></div>
         <div class="status"><span class="dot" id="wsDot"></span><span>stream</span></div>
         <a href="/docs" target="_blank" style="font-size:12px">API</a>
-        <span id="whoami" class="mono" style="font-size:11px;color:var(--muted)" hidden></span>
+        <a href="#" id="settingsLink" style="font-size:12px" hidden onclick="openSettings();return false">Settings</a>
         <a href="#" id="logout" style="font-size:12px" hidden onclick="signOut();return false">sign out</a>
     </div>
 
@@ -994,8 +994,7 @@
         <button id="liveBtn" class="live" onclick="toggleLive()">Go live</button>
         <button onclick="pull()">Pull 1h</button>
         <div class="sep"></div>
-        <select id="logSel"></select>
-        <button class="ghost" onclick="replay()">Replay</button>
+        <button id="replayBtn" class="ghost" onclick="replay()" title="Replay the sample log">Replay</button>
         <div class="sep"></div>
         <button class="ghost" onclick="clearAll()">Clear</button>
     </div>
@@ -1046,12 +1045,6 @@
             <div class="panel box">
                 <h3>Critical Alerts</h3>
                 <div id="alerts">
-                    <div class="empty">—</div>
-                </div>
-            </div>
-            <div class="panel box" id="auditPanel" hidden>
-                <h3>Audit Log <span class="mono" style="font-size:10px;color:var(--faint)">admin</span></h3>
-                <div id="audit">
                     <div class="empty">—</div>
                 </div>
             </div>
@@ -1231,17 +1224,70 @@
         async function initAuth() {
             try {
                 const me = await api("/api/auth/me");
-                const w = document.getElementById("whoami"), lo = document.getElementById("logout");
+                const lo = document.getElementById("logout"), st = document.getElementById("settingsLink");
                 const prototype = me.username === "prototype";   // ACT_AUTH_ENABLED=false
-                if (w) { w.textContent = me.username + " · " + me.role; w.hidden = false; }
                 if (lo) lo.hidden = prototype;
-                if (me.role === "admin") {
-                    document.getElementById("auditPanel").hidden = false;
-                    loadAudit();
-                }
+                if (st) st.hidden = prototype;
             } catch (e) { /* api() already redirected on 401 */ }
         }
         initAuth();
+
+        /* ---- settings modal: change password ---- */
+        function closeSettings() {
+            const m = document.getElementById("settings-modal");
+            if (m) m.remove();
+            document.removeEventListener("keydown", _settingsEsc);
+        }
+        function _settingsEsc(e) { if (e.key === "Escape") closeSettings(); }
+
+        function openSettings() {
+            closeSettings();
+            const back = document.createElement("div");
+            back.id = "settings-modal";
+            back.style.cssText = "position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;" +
+                "padding:24px;background:rgba(6,8,12,.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)";
+            back.addEventListener("click", ev => { if (ev.target === back) closeSettings(); });
+
+            const boxEl = document.createElement("div");
+            boxEl.className = "panel";
+            boxEl.style.cssText = "max-width:380px;width:100%;padding:16px 18px";
+            boxEl.innerHTML = `
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                  <div style="font-family:var(--font-display);font-weight:700;color:var(--accent)">Settings</div>
+                  <span class="grow" style="flex:1"></span>
+                  <button class="ghost" style="padding:2px 9px;font-size:14px;line-height:1" onclick="closeSettings()" title="close (Esc)">✕</button>
+                </div>
+                <div style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">change password</div>
+                <form id="pwForm" style="display:grid;gap:8px">
+                  <input type="password" id="pwCurrent" placeholder="current password" autocomplete="current-password" style="width:100%" required>
+                  <input type="password" id="pwNew" placeholder="new password (min 8 chars)" autocomplete="new-password" minlength="8" style="width:100%" required>
+                  <input type="password" id="pwConfirm" placeholder="confirm new password" autocomplete="new-password" minlength="8" style="width:100%" required>
+                  <div id="pwMsg" style="font-size:11.5px;min-height:14px"></div>
+                  <button class="primary" type="submit" style="margin-top:2px">Update password</button>
+                </form>`;
+            back.appendChild(boxEl);
+            document.body.appendChild(back);
+            document.addEventListener("keydown", _settingsEsc);
+
+            document.getElementById("pwForm").addEventListener("submit", async ev => {
+                ev.preventDefault();
+                const cur = document.getElementById("pwCurrent").value;
+                const nw = document.getElementById("pwNew").value;
+                const confirm = document.getElementById("pwConfirm").value;
+                const msg = document.getElementById("pwMsg");
+                if (nw !== confirm) { msg.textContent = "new passwords don't match"; msg.style.color = "var(--crit)"; return; }
+                if (nw.length < 8) { msg.textContent = "new password must be at least 8 characters"; msg.style.color = "var(--crit)"; return; }
+                msg.textContent = "updating…"; msg.style.color = "var(--muted)";
+                try {
+                    await api("/api/auth/change-password", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ current_password: cur, new_password: nw }),
+                    });
+                    msg.textContent = "password changed — signing out…"; msg.style.color = "var(--low)";
+                    setTimeout(signOut, 900);
+                } catch (e) { msg.textContent = e.message; msg.style.color = "var(--crit)"; }
+            });
+        }
 
         /* incident reports (per attacker) — fetched with the bearer token, then
            handed to the browser as a blob so no token rides in a URL */
@@ -1308,16 +1354,21 @@
             }
             catch (e) { flash(e.message); }
         }
+        // the single sample log Replay always loads — change this to switch it
+        const REPLAY_LOG = "two_attackers.log";
+
         async function replay() {
-            const name = document.getElementById("logSel").value;
-            if (!name) { flash("Pick a sample log from the dropdown first"); return; }
-            flash("replaying " + name + "…");
+            const btn = document.getElementById("replayBtn");
+            btn.disabled = true;
+            btn.textContent = "Replaying…";
+            flash("replaying " + REPLAY_LOG + "…");
             try {
-                const s = await api("/api/ingest/file?path=" + encodeURIComponent(name), { method: "POST" });
-                flash((s.events_created ?? 0) + " events from " + name);
+                const s = await api("/api/ingest/file?path=" + encodeURIComponent(REPLAY_LOG), { method: "POST" });
+                flash((s.events_created ?? 0) + " events from " + REPLAY_LOG);
                 refresh();
             }
             catch (e) { flash("replay failed: " + e.message); }
+            finally { btn.disabled = false; btn.textContent = "Replay"; }
         }
         async function toggleLive() {
             try {
@@ -1351,6 +1402,11 @@
 
         /* render */
         async function refresh() {
+            // fire these immediately, in parallel with /api/stats below — none of
+            // them depend on its result, so waiting for it first only adds latency
+            loadBehaviors(); loadGraph(); loadTwin(); loadAlerts(); loadFeed();
+            if (!document.getElementById("events").hidden) loadEvents();
+
             let s;
             try { s = await api("/api/stats"); }
             catch (e) {
@@ -1388,26 +1444,6 @@
                 ? s.techniques.map(t => `<div class="listrow"><a href="${esc(t.url)}" target="_blank" class="mono">${esc(t.id)}</a>
             <span style="color:var(--faint)">${esc(t.tactic)}</span></div>`).join("")
                 : '<div class="empty">—</div>';
-
-            loadBehaviors(); loadGraph(); loadTwin(); loadAlerts(); loadFeed();
-            if (!document.getElementById("audit").parentElement.hidden) loadAudit();
-            if (!document.getElementById("events").hidden) loadEvents();
-        }
-
-        /* Audit Log — admin only; the panel is unhidden by initAuth() */
-        async function loadAudit() {
-            const box = document.getElementById("audit");
-            let d; try { d = await api("/api/v1/audit?limit=40"); }
-            catch (e) { box.innerHTML = '<div class="empty">—</div>'; return; }
-            if (!d.entries || !d.entries.length) { box.innerHTML = '<div class="empty">no activity</div>'; return; }
-            box.innerHTML = d.entries.map(e => `
-                <div class="listrow" title="${esc(JSON.stringify(e.detail || {}))}">
-                    <span class="mono" style="color:var(--faint)">${esc((e.at || "").slice(0, 19).replace("T", " "))}</span>
-                    <span class="mono">${esc(e.actor || "—")}</span>
-                    <span style="color:var(--accent)">${esc(e.action)}</span>
-                    <span style="color:var(--faint)">${esc(e.target || "")}</span>
-                    <span style="color:var(--faint)">${esc(e.source_ip || "")}</span>
-                </div>`).join("");
         }
 
         /* Live Feed: the last 10 events, newest first. Rendered on every refresh
@@ -1517,13 +1553,21 @@
                     ? "Analysing the attack — predicting, deciding and writing the assessment…"
                     : "No attacker to assess yet.";
                 box.innerHTML = `<div class="panel" style="padding:0;overflow:hidden">
-                  ${twinHeader(null, null)}
+                  ${twinHeader(0)}
                   <div style="padding:14px 16px;color:var(--faint);font-size:12px">${esc(msg)}</div>
                 </div>`;
                 return;
             }
 
-            const a = d.assessments[0];              // worst attacker
+            // one card per attacker — every path the engine tracked gets its own
+            // predict/decide/respond/narrative block, not just the worst one
+            box.innerHTML = `<div class="panel" style="padding:0;overflow:hidden">
+              ${twinHeader(d.assessments.length)}
+              ${d.assessments.map((a, i) => twinCard(a, d, i > 0)).join("")}
+            </div>`;
+        }
+
+        function twinCard(a, d, divider) {
             const p = a.prediction, dec = a.decision, r = a.response, ai = a.llm_review;
             const next = p.next_steps[0];
 
@@ -1560,9 +1604,13 @@
                 : ai.recommendation === "block" ? "var(--crit)"
                 : ai.recommendation === "alert" ? "var(--high)" : "var(--low)";
 
-            box.innerHTML = `<div class="panel" style="padding:0;overflow:hidden">
-              ${twinHeader(p, a)}
-              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--border)">
+            return `${divider ? '<div style="height:1px;background:var(--border)"></div>' : ""}
+              <div style="display:flex;align-items:center;gap:8px;padding:12px 16px 0">
+                <span class="mono" style="font-size:13px;font-weight:700">${esc(a.actor || "unknown")}</span>
+                <span class="pill" style="color:${rc(dec.risk_score || 0)}">${dec.risk_score ?? 0}</span>
+                ${a.succeeded ? '<span class="mono" style="font-size:10.5px;color:var(--crit)">compromised</span>' : ""}
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--border);margin-top:10px">
                 <div style="background:var(--panel-solid);padding:13px 16px">
                   <div style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.6px">Predict · next move</div>
                   <div style="font-size:15px;font-weight:600;margin-top:5px">${next ? esc(next.stage_name) : "—"}</div>
@@ -1592,13 +1640,13 @@
                 })()}
                 <span class="grow" style="flex:1"></span>
                 ${reportBtns(a.actor)}
-              </div>
-            </div>`;
+              </div>`;
         }
 
-        function twinHeader(p, a) {
+        function twinHeader(count) {
             return `<div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)">
                 <span style="font-family:var(--font-display);text-transform:uppercase;letter-spacing:.6px;font-weight:700;color:var(--accent)">Cognitive Twin</span>
+                ${count > 1 ? `<span class="mono" style="font-size:11px;color:var(--muted)">${count} attackers tracked</span>` : ""}
                 <span class="grow" style="flex:1"></span>
                 <span class="mono" style="font-size:11px;color:${ARMED ? 'var(--crit)' : 'var(--faint)'}">${ARMED ? "● auto-response armed" : "○ no VM connected"}</span>
               </div>`;
@@ -1811,16 +1859,8 @@
             } catch (e) { toast(e.message, 3600); }
         }
 
-        async function loadLogs() {
-            try {
-                const d = await api("/api/logs");
-                document.getElementById("logSel").innerHTML =
-                    '<option value="">sample log…</option>' + d.logs.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
-            } catch (e) { }
-        }
-
         document.getElementById("ip").value = localStorage.getItem("act_ip") || "";
-        loadLogs(); refresh(); stream();
+        refresh(); stream();
         setInterval(refresh, 8000);
     </script>
 </body>

@@ -480,7 +480,13 @@ class AnalysisEngine:
         graph = self._graph or AttackGraph()
 
         #AI assessments: keyed to the graph we actually built (self._cached_at),
-        #not the live event count, so they always describe a real graph.
+        #not the live event count, so they always describe a real graph. The
+        #snapshot (count, graph) is captured here and threaded straight through
+        #to the assessment call - if it instead re-read self._graph when the
+        #thread actually runs, a newer graph built while it was still working
+        #(events keep streaming in during live monitoring) could get silently
+        #recorded under the OLD count, under-reporting attackers until the next
+        #refresh cycle caught the mismatch and redid the work.
         if not graph.paths:
             self._assessments = []
             self._assessed_count = self._cached_at
@@ -489,12 +495,12 @@ class AnalysisEngine:
                 #slow path (model calls) -> off the request thread
                 self._assessing = True
                 threading.Thread(
-                    target=self._assess_async, args=(self._cached_at,),
+                    target=self._assess_async, args=(self._cached_at, graph),
                     name="act-assess", daemon=True,
                 ).start()
             else:
                 #instant without a model -> keep it inline so callers see it now
-                self._assess_now(self._cached_at)
+                self._assess_now(self._cached_at, graph)
 
         #autonomous: queue a block for every attacker the engine decided on.
         #The actual SSH call happens on the background worker, so this returns
@@ -504,17 +510,17 @@ class AnalysisEngine:
         #fire critical-incident alerts (Telegram / Slack) off the request path
         self._notify_critical()
 
-    def _assess_now(self, count: int) -> None:
-        graph = self._graph or AttackGraph()
+    def _assess_now(self, count: int, graph: Optional[AttackGraph] = None) -> None:
+        graph = graph if graph is not None else (self._graph or AttackGraph())
         assessments = self.twin.assess(graph, self.store.all())
         with self._lock:
             self._assessments = assessments
             self._assessed_count = count
             self._assessed_at = time.monotonic()
 
-    def _assess_async(self, count: int) -> None:
+    def _assess_async(self, count: int, graph: Optional[AttackGraph] = None) -> None:
         try:
-            self._assess_now(count)
+            self._assess_now(count, graph)
         except Exception:                                   # noqa: BLE001
             pass
         finally:

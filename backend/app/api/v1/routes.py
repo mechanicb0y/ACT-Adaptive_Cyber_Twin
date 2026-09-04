@@ -12,6 +12,7 @@ query, calls :class:`AnalysisEngine`, and serialises. Two things are new:
 from __future__ import annotations
 
 import logging
+import threading
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -41,6 +42,19 @@ def _client_ip(request: Request) -> str | None:
     if fwd:
         return fwd.split(",")[0].strip()
     return request.client.host if request.client else None
+
+
+def _persist_snapshot_async(engine: AnalysisEngine) -> None:
+    """Mirror the current snapshot to the database off the request thread.
+
+    Persistence here is best-effort (see app.db.persist) and not something a
+    dashboard request should ever wait on - same reasoning as the AI layer and
+    block execution, which already run off-thread elsewhere in the engine.
+    """
+    threading.Thread(
+        target=persist.persist_snapshot, args=(engine,),
+        name="act-persist", daemon=True,
+    ).start()
 
 
 def _audit(db: Session, request: Request, actor: CurrentUser, action: str,
@@ -122,7 +136,7 @@ def get_intelligence(engine: AnalysisEngine = Depends(get_engine)):
     assessments = assessments_to_list(engine.assessments())   # triggers the refresh
     data = engine.response_mode()
     data["assessments"] = assessments
-    persist.persist_snapshot(engine)
+    _persist_snapshot_async(engine)
     return data
 
 
@@ -222,7 +236,7 @@ def notifications_test(_role=Depends(require_analyst),
                     "TELEGRAM_CHAT_ID in backend/.env."),
         )
     results = engine.notifier.send_text(
-        "✅ *ACT test alert* — Telegram notifications are wired up correctly."
+        "✅ ACT test alert — Telegram notifications are wired up correctly."
     )
     for entry in results or []:
         metrics.record_alert(entry.get("transport", "telegram"),
@@ -270,7 +284,7 @@ def ingest_file(
         stats = engine.ingest_file(path)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error))
-    persist.persist_snapshot(engine)
+    _persist_snapshot_async(engine)
     _audit(db, request, user, "ingest.file", path=path,
            events_created=stats.events_created)
     return _ingest_result(stats)
@@ -287,7 +301,7 @@ def ingest_journal(
         stats = engine.ingest_journal(since=since, units=unit)
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error))
-    persist.persist_snapshot(engine)
+    _persist_snapshot_async(engine)
     return {
         "lines_read": stats.lines_read,
         "events_created": stats.events_created,
@@ -315,7 +329,7 @@ def ingest_ssh(
         )
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error))
-    persist.persist_snapshot(engine)
+    _persist_snapshot_async(engine)
     return {
         "lines_read": stats.lines_read,
         "events_created": stats.events_created,

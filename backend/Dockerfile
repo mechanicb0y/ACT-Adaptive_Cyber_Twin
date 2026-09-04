@@ -31,6 +31,13 @@ COPY backend/ ./
 # The pipeline reads ../frontend/index.html relative to the backend tree.
 COPY frontend/ ../frontend/
 
+# Windows editors often save this with a UTF-8 BOM and/or CRLF line endings,
+# which breaks the shebang ("exec format error" at container start).
+# Normalize it at build time so that never matters.
+RUN sed -i '1s/^\xef\xbb\xbf//' docker-entrypoint.sh \
+    && sed -i 's/\r$//' docker-entrypoint.sh \
+    && chmod +x docker-entrypoint.sh
+
 RUN useradd --system --create-home --uid 10001 act \
     && mkdir -p /app/data /app/logs \
     && chown -R act:act /app /frontend
