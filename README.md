@@ -138,7 +138,6 @@ ACT/
 ├── windows/            Install-ActService.ps1 (NSSM / Scheduled Task), cert script
 ├── scripts/            attack sims + gen-dev-cert.sh + letsencrypt.sh + backup/restore
 ├── monitoring/         Prometheus + Grafana stack (ACT Overview dashboard)
-├── docs/DEPLOYMENT.md  Docker / systemd / Windows / SSL
 ├── docker-compose.yml  backend + frontend + postgres (+ pgadmin, ollama profiles)
 └── .env.docker.example compose configuration
 ```
@@ -190,7 +189,7 @@ python -m app.main --file tests/logs/auth_bruteforce.log
 
 ### B. Kali / Linux — the monitored machine
 
-You have two options (full detail in [`docs/KALI_SETUP.md`](docs/KALI_SETUP.md)):
+You have two options:
 
 **Option A (recommended): ACT on Windows, pulls logs from Kali over SSH.**
 On Kali:
@@ -212,8 +211,6 @@ python -m app.main --ssh kali@192.168.10.139 --since=-1h
 requirements.txt`, and use `--journal` instead of `--ssh`.
 
 ### C. Ollama — local AI (optional)
-
-Full guide: [`docs/OLLAMA_RAG_SETUP.md`](docs/OLLAMA_RAG_SETUP.md).
 
 ```bash
 # install from https://ollama.com, then:
@@ -262,8 +259,7 @@ python -m app.main --file tests/logs/auth_bruteforce.log --json
 ### As a service (production)
 
 One process — `python -m app.main --mode service` (alias `act --mode service`) —
-runs uvicorn in the foreground for a supervisor to manage. Four ways to deploy
-it, all covered in **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**:
+runs uvicorn in the foreground for a supervisor to manage. Four ways to deploy it:
 
 ```bash
 # Docker Compose — backend + nginx frontend + Postgres (+ optional pgAdmin, Ollama)
@@ -548,7 +544,7 @@ Environment (`backend/.env`): `OLLAMA_MODEL`, `OLLAMA_PATH`, `ACT_LLM_PROVIDER`,
 | --- | --- |
 | Dashboard shows **API offline** | Start `uvicorn` in `backend/`. Check nothing else holds port 8000. |
 | `pip install` fails on `requirements.txt` | Save the file as UTF-8 (some Windows editors write UTF-16). Upgrade `pip`. |
-| SSH ingest: **"could not read the remote journal"** | Use the dashboard's *Test connection*. Usually key auth or journal permissions — `sudo usermod -aG systemd-journal $USER` on the target, or pass `sudo=true`. See `docs/KALI_SETUP.md`. |
+| SSH ingest: **"could not read the remote journal"** | Use the dashboard's *Test connection*. Usually key auth or journal permissions — `sudo usermod -aG systemd-journal $USER` on the target, or pass `sudo=true`. |
 | No attack paths after replaying a log | Confirm events were created (`/api/stats`). Very old timestamps still work; too few events for a rule's `threshold` won't correlate. |
 | Narrative says **"built-in"** | No model reachable. Start `ollama serve` / `ollama pull llama3.2`, or set `GEMINI_API_KEY`. ACT still works without one. |
 | AI never influences the decision | Expected without a model. With Ollama running, check `intelligence.provider` in `/api/stats`. |
@@ -577,6 +573,3 @@ Environment (`backend/.env`): `OLLAMA_MODEL`, `OLLAMA_PATH`, `ACT_LLM_PROVIDER`,
    `data/mitre_attack.json`.
 7. Open the PR against `develop` with a short "why", the test output, and a note
    on any config or contract change.
-
-The `docs/WEEK_0*.md` files record why each layer is shaped the way it is —
-worth reading before a larger change.

@@ -33,7 +33,6 @@ def _read(rel: str) -> str:
     "windows/Install-ActService.ps1",
     "scripts/letsencrypt.sh",
     "scripts/gen-dev-cert.sh",
-    "docs/DEPLOYMENT.md",
     "backend/pyproject.toml",
 ])
 def test_asset_present(rel):

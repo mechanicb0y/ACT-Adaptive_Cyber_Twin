@@ -104,6 +104,94 @@ def _table(headers: List[str], rows: List[List[str]], cls: str = "") -> str:
     return f'<table class="{cls}"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
 
 
+# severity -> (fill, border) - light/dark aware pairs kept sober enough to print
+_SEV_FILL = {
+    "Critical": ("#fbe4e8", "#c0203f"),
+    "High":     ("#fbe9db", "#b5560d"),
+    "Medium":   ("#fbf3d6", "#8a6d0b"),
+    "Low":      ("#dff2e7", "#1c7a48"),
+}
+_NOT_OBSERVED_FILL = ("#f2f3f5", "#b6bcc6")
+
+
+def _truncate(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _flow_diagram(kill_chain: List[Dict[str, Any]], deepest_stage: int) -> str:
+    """An inline SVG of the full kill chain, the attacker's reached stages
+    highlighted by severity and labelled with the MITRE techniques observed
+    at each one. No JS, no external assets - same philosophy as the rest of
+    this report."""
+
+    if not kill_chain:
+        return '<p class="muted">No kill-chain activity recorded.</p>'
+
+    n = len(kill_chain)
+    box_w, box_h, gap, pad = 132, 76, 26, 8
+    width = n * box_w + (n - 1) * gap + pad * 2
+    height = box_h + pad * 2 + 16
+
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" '
+        f'style="max-width:{width}px;display:block;margin:0 auto" '
+        f'xmlns="http://www.w3.org/2000/svg" role="img" '
+        f'aria-label="Attack flow across the kill chain">',
+        '<defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" '
+        'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+        '<path d="M0,0 L8,4 L0,8 z" fill="var(--soft)"/></marker></defs>',
+    ]
+
+    y = pad
+    for i, stage in enumerate(kill_chain):
+        x = pad + i * (box_w + gap)
+        observed = bool(stage.get("observed", True))
+        is_deepest = observed and stage["stage"] == deepest_stage
+        fill, border = _SEV_FILL.get(stage.get("severity", "Low"), _SEV_FILL["Low"]) \
+            if observed else _NOT_OBSERVED_FILL
+
+        if i > 0:
+            prev_x = pad + (i - 1) * (box_w + gap) + box_w
+            parts.append(
+                f'<line x1="{prev_x}" y1="{y + box_h / 2}" x2="{x}" y2="{y + box_h / 2}" '
+                f'stroke="var(--soft)" stroke-width="1.4" marker-end="url(#arrow)"/>'
+            )
+
+        stroke_w = 2.4 if is_deepest else 1.2
+        dash = "0" if observed else "4 3"
+        parts.append(
+            f'<rect x="{x}" y="{y}" width="{box_w}" height="{box_h}" rx="7" '
+            f'fill="{fill}" stroke="{border}" stroke-width="{stroke_w}" '
+            f'stroke-dasharray="{dash}"/>'
+        )
+        parts.append(
+            f'<text x="{x + box_w / 2}" y="{y + 18}" text-anchor="middle" '
+            f'font-size="9.5" font-weight="700" fill="{border}" '
+            f'style="text-transform:uppercase;letter-spacing:.04em">Stage {stage["stage"]}</text>'
+        )
+        parts.append(
+            f'<text x="{x + box_w / 2}" y="{y + 33}" text-anchor="middle" '
+            f'font-size="11" font-weight="600" fill="var(--ink)">'
+            f'{_e(_truncate(stage["name"], 20))}</text>'
+        )
+        techniques = ", ".join(stage.get("techniques") or [])
+        label = _e(_truncate(techniques, 22)) if techniques else ("not observed" if not observed else "—")
+        parts.append(
+            f'<text x="{x + box_w / 2}" y="{y + 49}" text-anchor="middle" '
+            f'font-size="9" fill="var(--soft)" font-family="ui-monospace,Consolas,monospace">'
+            f'{label}</text>'
+        )
+        if is_deepest:
+            parts.append(
+                f'<text x="{x + box_w / 2}" y="{y + box_h - 8}" text-anchor="middle" '
+                f'font-size="8.5" font-weight="700" fill="{border}" '
+                f'style="text-transform:uppercase;letter-spacing:.06em">▲ current</text>'
+            )
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 def render_html(report: Dict[str, Any]) -> str:
     meta = report["meta"]
     attacker = report["attacker"]
@@ -151,9 +239,13 @@ def render_html(report: Dict[str, Any]) -> str:
     killchain = _table(
         ["Stage", "Phase", "Observed activity"],
         [[_e(k["stage"]), _e(k["name"]),
-          _e(", ".join(k["behaviors"])) + (f' <span class="muted">[{_e(", ".join(k["techniques"]))}]</span>' if k["techniques"] else "")]
+          (_e(", ".join(k["behaviors"])) +
+           (f' <span class="muted">[{_e(", ".join(k["techniques"]))}]</span>' if k["techniques"] else ""))
+          if k.get("observed", True) else '<span class="muted">Not observed</span>']
          for k in report["kill_chain"]],
     )
+
+    flow_diagram = _flow_diagram(report["kill_chain"], attacker["deepest_stage"])
 
     timeline = _table(
         ["Time", "Event", "User", "Source", "Detail"],
@@ -231,7 +323,12 @@ def render_html(report: Dict[str, Any]) -> str:
   </section>
 
   <section>
-    <h2>4 &nbsp; Kill-chain progression</h2>
+    <h2>4 &nbsp; Attack flow &amp; kill-chain progression</h2>
+    {flow_diagram}
+    <p class="muted" style="margin-top:10px;font-size:11.5px">
+      Solid boxes are stages this attacker reached, coloured by severity; dashed
+      boxes were not observed. <b>▲ current</b> marks the deepest stage reached.
+    </p>
     {killchain}
   </section>
 

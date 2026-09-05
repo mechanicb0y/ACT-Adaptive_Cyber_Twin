@@ -51,7 +51,8 @@ class SSHJournalReader(JournaldReader):
         self.ssh_path = ssh_path
 
         #only needed if the login user is not in the systemd-journal group.
-        #Adding the user to that group is the better answer, see docs/KALI_SETUP.md
+        #Adding the user to that group (usermod -aG systemd-journal $USER) is
+        #the better fix - see the README's Kali/Linux setup section.
         self.use_sudo = use_sudo
 
     @property

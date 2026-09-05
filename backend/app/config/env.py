@@ -5,7 +5,7 @@ safe to import more than once - python-dotenv will not clobber a value that is
 already set in the real environment.
 
 The file lives at ``backend/.env`` and is git-ignored. See
-``docs/OLLAMA_RAG_SETUP.md``.
+``backend/.env.example`` for every supported variable.
 """
 
 import os

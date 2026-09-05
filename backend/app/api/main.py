@@ -111,6 +111,14 @@ def login_page():
     return FileResponse(page)
 
 
+@app.get("/logo.jpeg", include_in_schema=False)
+def logo():
+    logo_file = FRONTEND_DIR / "public" / "logo.jpeg"
+    if not logo_file.exists():
+        return JSONResponse({"detail": "logo not found"}, status_code=404)
+    return FileResponse(logo_file)
+
+
 # ------------------------------------------------------------ live stream #
 
 

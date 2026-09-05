@@ -648,6 +648,7 @@ class AnalysisEngine:
             generated_at=datetime.now(),
             monitored_host=self._ssh_identity.get("host"),
             armed=self._armed,
+            all_stages=self.correlator.mitre_mapper.stages,
         )
 
         slug = "".join(c if c.isalnum() or c in "-._" else "_" for c in (actor or "attacker"))

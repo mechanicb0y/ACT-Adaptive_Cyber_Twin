@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.models.attack_graph import AttackPath
+from app.models.severity import Severity
 from app.models.twin import TwinAssessment
 
 REPORT_TITLE = "ACT Incident Report"
@@ -31,8 +32,18 @@ def _techniques(path: AttackPath) -> List[Dict[str, str]]:
     return list(seen.values())
 
 
-def _kill_chain(path: AttackPath) -> List[Dict[str, Any]]:
-    #one row per kill-chain stage the attacker reached, in order
+def _kill_chain(
+    path: AttackPath, all_stages: Optional[Dict[int, str]] = None
+) -> List[Dict[str, Any]]:
+    """One row per kill-chain stage, in order.
+
+    When ``all_stages`` (the full stage-number -> name map from the MITRE
+    knowledge base) is supplied, every stage is included - not just the ones
+    this attacker reached - each flagged ``observed``, so the report and its
+    attack-flow diagram can show the whole kill chain with the attacker's
+    actual path highlighted against it. Falls back to reached-only stages
+    (the old behaviour) when the map isn't available.
+    """
     by_stage: Dict[int, Dict[str, Any]] = {}
     for node in path.nodes:
         stage = node.stage
@@ -43,11 +54,30 @@ def _kill_chain(path: AttackPath) -> List[Dict[str, Any]]:
             "name": node.stage_name,
             "behaviors": [],
             "techniques": [],
+            "risk_score": 0,
+            "severity": "Low",
+            "observed": True,
         })
         row["behaviors"].append(node.behavior.name)
+        row["risk_score"] = max(row["risk_score"], node.behavior.risk_score)
+        if Severity.rank(node.behavior.severity) > Severity.rank(row["severity"]):
+            row["severity"] = node.behavior.severity
         for technique in node.behavior.techniques:
             if technique.id not in row["techniques"]:
                 row["techniques"].append(technique.id)
+
+    if all_stages:
+        for stage, name in all_stages.items():
+            by_stage.setdefault(stage, {
+                "stage": stage,
+                "name": name,
+                "behaviors": [],
+                "techniques": [],
+                "risk_score": 0,
+                "severity": "Low",
+                "observed": False,
+            })
+
     return [by_stage[k] for k in sorted(by_stage)]
 
 
@@ -115,6 +145,7 @@ def build_report(
     generated_at: Optional[datetime] = None,
     monitored_host: Optional[str] = None,
     armed: bool = False,
+    all_stages: Optional[Dict[int, str]] = None,
 ) -> Dict[str, Any]:
     """Collect every fact the report shows into one JSON-friendly dict."""
 
@@ -154,7 +185,7 @@ def build_report(
         "ai": ai,
         "summary": assessment.narrative,
         "mitre_techniques": _techniques(path),
-        "kill_chain": _kill_chain(path),
+        "kill_chain": _kill_chain(path, all_stages),
         "prediction": {
             "summary": prediction.summary,
             "model": prediction.model,

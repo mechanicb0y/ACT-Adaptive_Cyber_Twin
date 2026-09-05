@@ -6,11 +6,50 @@
 #version of the report is the HTML one (html_report.py); this keeps the
 #"Download PDF" button working everywhere and produces a clean, sober document.
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 PAGE_W, PAGE_H = 612, 792          #US Letter, points
 MARGIN = 56
 WRAP = 96                          #chars per wrapped body line
+
+# ---------------------------------------------------------------- diagram #
+# Same severity palette as html_report.py's CSS, converted to 0-1 RGB triples
+# (fill, stroke), so the PDF and HTML reports read as one visual system.
+_SEV_RGB = {
+    "Critical": ((0.984, 0.894, 0.910), (0.753, 0.125, 0.247)),
+    "High":     ((0.984, 0.914, 0.859), (0.710, 0.337, 0.051)),
+    "Medium":   ((0.984, 0.953, 0.839), (0.541, 0.427, 0.043)),
+    "Low":      ((0.875, 0.949, 0.906), (0.110, 0.478, 0.282)),
+}
+_NOT_OBSERVED_RGB = ((0.949, 0.953, 0.961), (0.714, 0.737, 0.776))
+_SOFT_RGB = (0.357, 0.396, 0.447)
+_INK_RGB = (0.102, 0.114, 0.141)
+
+# Real Type1 font metrics would need AFM tables; these are close enough
+# average em-widths to center short labels inside a box without one.
+# Courier is genuinely fixed-pitch, so its value is exact.
+_AVG_CHAR_WIDTH = {"F1": 0.52, "F2": 0.56, "F3": 0.6}
+
+DIAGRAM_BOX_H = 58.0
+DIAGRAM_TOP_MARGIN = 16.0          #room for the "STAGE n" label above the box
+
+
+def _text_width(text: str, font: str, size: float) -> float:
+    return len(text) * _AVG_CHAR_WIDTH.get(font, 0.5) * size
+
+
+def _centered_x(center_x: float, text: str, font: str, size: float) -> float:
+    return center_x - _text_width(text, font, size) / 2
+
+
+def _truncate(text: str, width: int) -> str:
+    # the content stream is encoded latin-1 ("…" isn't in that charset and
+    # would silently become "?") - a plain period truncates safely instead
+    return text if len(text) <= width else text[: width - 1] + "."
+
+
+def _rgb(t: Tuple[float, float, float]) -> str:
+    return f"{t[0]:.3f} {t[1]:.3f} {t[2]:.3f}"
 
 # style -> (font_resource, size, line_height, gap_before)
 _STYLE = {
@@ -52,6 +91,84 @@ def _wrap(text: str, width: int, indent: int = 0) -> List[str]:
     return out or [""]
 
 
+def _diagram_ops(
+    stages: List[dict], deepest_stage: int, x0: float, y_top: float
+) -> List[str]:
+    """Raw PDF content-stream operators for the kill-chain flow diagram: one
+    box per stage (filled/coloured by severity, dashed if not observed),
+    connected by arrows, labelled with the stage name and MITRE technique IDs.
+    Mirrors html_report.py's SVG version so both formats read as one report."""
+
+    n = len(stages)
+    if not n:
+        return []
+
+    box_w, gap = 68.0, 8.0
+    total_w = n * box_w + (n - 1) * gap
+    max_w = PAGE_W - 2 * MARGIN
+    if total_w > max_w:
+        scale = max_w / total_w
+        box_w *= scale
+        gap *= scale
+
+    box_h = DIAGRAM_BOX_H
+    y = y_top - box_h
+    ops: List[str] = []
+
+    for i, stage in enumerate(stages):
+        x = x0 + i * (box_w + gap)
+        observed = bool(stage.get("observed", True))
+        is_deepest = observed and stage["stage"] == deepest_stage
+        fill, stroke = (_SEV_RGB.get(stage.get("severity", "Low"), _SEV_RGB["Low"])
+                        if observed else _NOT_OBSERVED_RGB)
+        line_w = 1.6 if is_deepest else 0.8
+
+        if i > 0:
+            prev_x = x0 + (i - 1) * (box_w + gap) + box_w
+            mid_y = y + box_h / 2
+            ops.append(f"{_rgb(_SOFT_RGB)} RG 0.8 w {prev_x:.1f} {mid_y:.1f} m {x:.1f} {mid_y:.1f} l S")
+            arrow = 3.2
+            ops.append(
+                f"{_rgb(_SOFT_RGB)} rg {x:.1f} {mid_y:.1f} m "
+                f"{x - arrow * 1.6:.1f} {mid_y - arrow:.1f} l "
+                f"{x - arrow * 1.6:.1f} {mid_y + arrow:.1f} l f"
+            )
+
+        dash_on = "" if observed else "[3 2] 0 d "
+        ops.append(
+            f"{dash_on}{_rgb(fill)} rg {_rgb(stroke)} RG {line_w} w "
+            f"{x:.1f} {y:.1f} {box_w:.1f} {box_h:.1f} re B"
+        )
+        if not observed:
+            ops.append("[] 0 d")   # dash pattern persists in the content stream - reset it
+
+        cx = x + box_w / 2
+        stage_lbl = f"STAGE {stage['stage']}"
+        ops.append(
+            f"BT /F2 7 Tf {_rgb(stroke)} rg 1 0 0 1 "
+            f"{_centered_x(cx, stage_lbl, 'F2', 7):.1f} {y + box_h - 13:.1f} Tm ({_esc(stage_lbl)}) Tj ET"
+        )
+        name = _truncate(stage["name"], 14)
+        ops.append(
+            f"BT /F2 7.5 Tf {_rgb(_INK_RGB)} rg 1 0 0 1 "
+            f"{_centered_x(cx, name, 'F2', 7.5):.1f} {y + box_h - 25:.1f} Tm ({_esc(name)}) Tj ET"
+        )
+        techniques = ", ".join(stage.get("techniques") or [])
+        tech_lbl = _truncate(techniques, 14) if techniques else ("not observed" if not observed else "-")
+        ops.append(
+            f"BT /F3 6.5 Tf {_rgb(_SOFT_RGB)} rg 1 0 0 1 "
+            f"{_centered_x(cx, tech_lbl, 'F3', 6.5):.1f} {y + box_h - 37:.1f} Tm ({_esc(tech_lbl)}) Tj ET"
+        )
+        if is_deepest:
+            cur = "CURRENT"
+            ops.append(
+                f"BT /F2 6 Tf {_rgb(stroke)} rg 1 0 0 1 "
+                f"{_centered_x(cx, cur, 'F2', 6):.1f} {y + 6:.1f} Tm ({_esc(cur)}) Tj ET"
+            )
+
+    return ops
+
+
 class _Doc:
 
     def __init__(self) -> None:
@@ -85,6 +202,9 @@ class _Doc:
     def rule(self) -> None:
         self._items.append(("rule", ""))
 
+    def diagram(self, stages: List[dict], deepest_stage: int) -> None:
+        self._items.append(("diagram", (stages, deepest_stage)))
+
     # ------------------------------------------------------------------ #
 
     def _paginate(self):
@@ -99,6 +219,15 @@ class _Doc:
                 y -= 5
                 page.append(("__rule__", y))
                 y -= 8
+                continue
+
+            if style == "diagram":
+                block_h = DIAGRAM_BOX_H + 12
+                if y - block_h < MARGIN:
+                    pages.append(page); page = []; y = PAGE_H - MARGIN
+                stages, deepest_stage = text
+                page.append(("__diagram__", y, stages, deepest_stage))
+                y -= block_h
                 continue
 
             font, size, lh, gap_before = _STYLE[style]
@@ -143,6 +272,11 @@ class _Doc:
                         parts.append("ET"); text_open = False
                     y = item[1]
                     parts.append(f"0.6 w 0.6 0.6 0.6 RG {MARGIN} {y:.1f} m {PAGE_W - MARGIN} {y:.1f} l S")
+                elif item[0] == "__diagram__":
+                    if text_open:
+                        parts.append("ET"); text_open = False
+                    _, top_y, stages, deepest_stage = item
+                    parts.extend(_diagram_ops(stages, deepest_stage, MARGIN, top_y))
                 else:
                     _, font, size, baseline, text = item
                     if not text_open:
@@ -255,13 +389,21 @@ def render_pdf(report: Dict[str, Any]) -> bytes:
     else:
         d.add("body", "None recorded.")
 
-    d.add("h2", "4   KILL-CHAIN PROGRESSION")
+    d.add("h2", "4   ATTACK FLOW & KILL-CHAIN PROGRESSION")
     if report["kill_chain"]:
+        d.diagram(report["kill_chain"], attacker["deepest_stage"])
+        d.add("body", "Solid boxes are stages this attacker reached, coloured by "
+                      "severity; dashed boxes were not observed. CURRENT marks the "
+                      "deepest stage reached.")
+        d.gap()
         d.row(["ST", "PHASE", "OBSERVED ACTIVITY"], [4, 24, 62])
         for k in report["kill_chain"]:
-            activity = ", ".join(k["behaviors"])
-            if k["techniques"]:
-                activity += f"  [{', '.join(k['techniques'])}]"
+            if k.get("observed", True):
+                activity = ", ".join(k["behaviors"])
+                if k["techniques"]:
+                    activity += f"  [{', '.join(k['techniques'])}]"
+            else:
+                activity = "Not observed"
             d.row([str(k["stage"]), k["name"], activity], [4, 24, 62])
     else:
         d.add("body", "None recorded.")

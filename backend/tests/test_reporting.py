@@ -20,8 +20,10 @@ def test_html_report_has_every_required_section(engine):
     assert filename.endswith(".html")
 
     for heading in ("Summary", "Assessment", "MITRE ATT&amp;CK techniques",
-                    "Kill-chain progression", "Event timeline", "Response"):
+                    "Attack flow &amp; kill-chain progression", "Event timeline", "Response"):
         assert heading in html
+
+    assert "<svg" in html                        # the attack-flow diagram
 
     assert "192.168.1.50" in html
     assert "T1110" in html                       # a brute-force technique id
@@ -40,6 +42,8 @@ def test_pdf_report_is_a_well_formed_pdf(engine):
     assert pdf.rstrip().endswith(b"%%EOF")
     assert b"/Type /Catalog" in pdf
     assert b"MITRE ATT&CK TECHNIQUES" in pdf
+    assert b"ATTACK FLOW & KILL-CHAIN PROGRESSION" in pdf
+    assert b" re B" in pdf                        # a filled/stroked diagram box
 
 
 def test_report_for_an_unknown_actor_is_none(engine):
@@ -50,6 +54,17 @@ def test_report_contains_the_ai_section_even_without_a_model(engine):
     #the suite runs with ACT_LLM_PROVIDER=none, so the report must still render
     html, _, _ = engine.report("192.168.1.50", fmt="html")
     assert "deterministic engine alone" in html
+
+
+def test_report_kill_chain_includes_unreached_stages(logs_dir):
+    #engine.report() passes the full MITRE stage map, so the diagram (and the
+    #table beneath it) can show the whole kill chain, not just what this
+    #attacker reached. 185.220.101.34 in two_attackers.log only makes it to
+    #stage 2 of 6, so stages beyond that must show up as unreached.
+    e = AnalysisEngine()
+    e.ingest_file(str(logs_dir / "two_attackers.log"))
+    html, _, _ = e.report("185.220.101.34", fmt="html")
+    assert "Not observed" in html
 
 
 def test_report_payload_is_serialisable(engine):
