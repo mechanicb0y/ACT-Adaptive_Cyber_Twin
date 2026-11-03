@@ -1,7 +1,7 @@
 # ACT — Adaptive Cyber Twin
 
 ACT reads a Linux machine's security logs, understands them the way an analyst
-would, and — when you let it — defends the machine on its own.
+would, and when you let it defends the machine on its own.
 
 It ingests real `sshd` / `sudo` / `useradd` activity, correlates isolated events
 into **behaviours** (brute force, user enumeration, privilege escalation,
